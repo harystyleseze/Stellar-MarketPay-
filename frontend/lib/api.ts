@@ -262,6 +262,22 @@ export async function fetchProfile(publicKey: string) {
 }
 
 /**
+ * Fetches a public profile for display on shared profile pages.
+ * Returns `null` when the backend responds with 404 (no profile yet).
+ */
+export async function fetchPublicProfile(publicKey: string): Promise<UserProfile | null> {
+  try {
+    const { data } = await api.get<{ success: boolean; data: UserProfile }>(
+      `/api/profiles/${encodeURIComponent(publicKey)}`
+    );
+    return data.data;
+  } catch (e) {
+    if (axios.isAxiosError(e) && e.response?.status === 404) return null;
+    throw e;
+  }
+}
+
+/**
  * Creates or updates a user profile.
  *
  * Request payload shape:
@@ -293,8 +309,15 @@ export async function upsertProfile(payload: Partial<UserProfile> & { publicKey:
  * @throws {import("axios").AxiosError} If release validation fails or the request errors.
  * @see backend/src/routes/escrow.js
  */
-export async function releaseEscrow(jobId: string, clientAddress: string) {
-  const { data } = await api.post(`/api/escrow/${jobId}/release`, { clientAddress });
+export async function releaseEscrow(
+  jobId: string,
+  clientAddress: string,
+  contractTxHash?: string
+) {
+  const { data } = await api.post(`/api/escrow/${jobId}/release`, {
+    clientAddress,
+    ...(contractTxHash ? { contractTxHash } : {}),
+  });
   return data.data;
 }
 

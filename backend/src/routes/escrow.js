@@ -24,7 +24,7 @@ const { getJob, updateJobStatus } = require("../services/jobService");
 router.post("/:jobId/release", (req, res, next) => {
   try {
     const { jobId } = req.params;
-    const { clientAddress } = req.body;
+    const { clientAddress, contractTxHash } = req.body;
 
     if (!clientAddress || !/^G[A-Z0-9]{55}$/.test(clientAddress)) {
       const e = new Error("Invalid client address"); e.status = 400; throw e;
@@ -38,7 +38,7 @@ router.post("/:jobId/release", (req, res, next) => {
       const e = new Error("Job is not in progress"); e.status = 400; throw e;
     }
 
-    // Record escrow release
+    // Record escrow release (contractTxHash set when release_escrow ran on-chain)
     const escrowRecord = {
       jobId,
       client:     job.clientAddress,
@@ -46,7 +46,10 @@ router.post("/:jobId/release", (req, res, next) => {
       amount:     job.budget,
       status:     "released",
       releasedAt: new Date().toISOString(),
-      // TODO v1.2: contractTxHash — Soroban transaction hash
+      contractTxHash:
+        typeof contractTxHash === "string" && /^[0-9a-f]{64}$/i.test(contractTxHash.trim())
+          ? contractTxHash.trim()
+          : null,
     };
     escrows.set(jobId, escrowRecord);
 

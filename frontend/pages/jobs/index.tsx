@@ -24,6 +24,8 @@ export default function JobsPage() {
   const category = (router.query.category as string) || "";
   const status = (router.query.status as string) || "open";
   const pageFromQuery = Math.max(1, Number(router.query.page) || 1);
+  const minBudget = (router.query.minBudget as string) || "";
+  const maxBudget = (router.query.maxBudget as string) || "";
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -75,13 +77,26 @@ export default function JobsPage() {
     return () => { isCancelled = true; };
   }, [category, status, pageFromQuery, router.isReady]);
 
-  const filtered = search.trim()
+  const searchFiltered = search.trim()
     ? jobs.filter((j) =>
       j.title.toLowerCase().includes(search.toLowerCase()) ||
       j.description.toLowerCase().includes(search.toLowerCase()) ||
       j.skills.some((s) => s.toLowerCase().includes(search.toLowerCase()))
     )
     : jobs;
+
+  const minN = minBudget.trim() ? parseFloat(minBudget) : NaN;
+  const maxN = maxBudget.trim() ? parseFloat(maxBudget) : NaN;
+  const filtered =
+    !Number.isNaN(minN) || !Number.isNaN(maxN)
+      ? searchFiltered.filter((j) => {
+          const b = parseFloat(j.budget);
+          if (Number.isNaN(b)) return false;
+          if (!Number.isNaN(minN) && b < minN) return false;
+          if (!Number.isNaN(maxN) && b > maxN) return false;
+          return true;
+        })
+      : searchFiltered;
 
   const setFilter = (key: string, val: string) => {
     router.push(

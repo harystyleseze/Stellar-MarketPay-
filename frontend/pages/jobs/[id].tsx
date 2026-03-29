@@ -10,7 +10,13 @@ import WalletConnect from "@/components/WalletConnect";
 import RatingForm from "@/components/RatingForm";
 import { fetchJob, fetchApplications, acceptApplication, releaseEscrow } from "@/lib/api";
 import { formatXLM, timeAgo, formatDate, shortenAddress, statusLabel, statusClass } from "@/utils/format";
-import { accountUrl } from "@/lib/stellar";
+import {
+  accountUrl,
+  buildReleaseEscrowTransaction,
+  explorerUrl,
+  submitSignedSorobanTransaction,
+} from "@/lib/stellar";
+import { signTransactionWithWallet } from "@/lib/wallet";
 import type { Job, Application } from "@/utils/types";
 import clsx from "clsx";
 
@@ -29,6 +35,9 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
   const [showApplyForm, setShowApplyForm] = useState(false);
   const [releasingEscrow, setReleasingEscrow] = useState(false);
   const [releaseSuccess, setReleaseSuccess] = useState(false);
+  const [releaseTxHash, setReleaseTxHash] = useState<string | null>(null);
+  /** True when backend job status was updated after the chain release. */
+  const [releaseSyncedWithBackend, setReleaseSyncedWithBackend] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
 
@@ -45,7 +54,7 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
       .then(([j, apps]) => { setJob(j); setApplications(apps); })
       .catch(() => router.push("/jobs"))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, router]);
 
   const handleAcceptApplication = async (appId: string) => {
     if (!publicKey) return;
@@ -60,15 +69,45 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
 
   const handleReleaseEscrow = async () => {
     if (!publicKey || !job) return;
+    if (!job.escrowContractId) {
+      setActionError(
+        "This job has no escrow contract ID. Set NEXT_PUBLIC_CONTRACT_ID after deploying the Soroban contract, and ensure the job record stores the contract address."
+      );
+      return;
+    }
+
     setReleasingEscrow(true);
     setActionError(null);
+    setReleaseTxHash(null);
+    setReleaseSyncedWithBackend(false);
+
     try {
-      await releaseEscrow(job.id, publicKey);
-      setReleaseSuccess(true);
-      const j = await fetchJob(id as string);
-      setJob(j);
-    } catch {
-      setActionError("Failed to release escrow. Please try again.");
+      const prepared = await buildReleaseEscrowTransaction(job.escrowContractId, job.id, publicKey);
+      const { signedXDR, error: signError } = await signTransactionWithWallet(prepared.toXDR());
+      if (signError || !signedXDR) {
+        setActionError(signError || "Signing was cancelled.");
+        return;
+      }
+
+      const { hash } = await submitSignedSorobanTransaction(signedXDR);
+      setReleaseTxHash(hash);
+
+      try {
+        await releaseEscrow(job.id, publicKey, hash);
+        const j = await fetchJob(id as string);
+        setJob(j);
+        setReleaseSuccess(true);
+        setReleaseSyncedWithBackend(true);
+      } catch {
+        setActionError(
+          "Payment was released on-chain, but the app could not update your job status. Keep this transaction hash and retry or contact support."
+        );
+        setReleaseSuccess(true);
+        setReleaseSyncedWithBackend(false);
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Could not complete the release. Please try again.";
+      setActionError(msg);
     } finally {
       setReleasingEscrow(false);
     }
@@ -149,7 +188,27 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
           <p className="text-amber-700 text-sm mb-4">
             Work complete? Release <span className="text-market-400 font-mono font-semibold">{formatXLM(job.budget)}</span> from escrow to the freelancer.
           </p>
-          {releaseSuccess ? (
+          {releaseSuccess && releaseTxHash ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-emerald-400 text-sm font-medium">
+                <span>✅</span>
+                {releaseSyncedWithBackend
+                  ? "Escrow released on-chain. Your job is marked complete."
+                  : "Escrow released on-chain."}
+              </div>
+              <p className="text-xs text-amber-700 break-all font-mono">
+                Transaction: {releaseTxHash}
+              </p>
+              <a
+                href={explorerUrl(releaseTxHash)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex text-sm text-market-400 hover:text-market-300 underline"
+              >
+                View on Stellar Expert →
+              </a>
+            </div>
+          ) : releaseSuccess ? (
             <div className="flex items-center gap-2 text-emerald-400 text-sm font-medium">
               <span>✅</span> Escrow released! Payment sent to freelancer.
             </div>

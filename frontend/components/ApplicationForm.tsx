@@ -141,7 +141,10 @@ function ConfirmModal({ jobTitle, bidAmount, proposal, onConfirm, onClose }: Con
           <div>
             <span className="text-amber-800 text-xs uppercase tracking-wider font-semibold block mb-1">Proposal Preview</span>
             <p className="text-amber-100/70 text-sm line-clamp-3 italic">
-              "{proposal.slice(0, 100)}{proposal.length > 100 ? "..." : ""}"
+              {'\u201c'}
+              {proposal.slice(0, 100)}
+              {proposal.length > 100 ? "..." : ""}
+              {'\u201d'}
             </p>
           </div>
 

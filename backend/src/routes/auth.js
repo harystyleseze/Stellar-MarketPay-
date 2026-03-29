@@ -24,7 +24,7 @@ const NETWORK_PASSPHRASE = process.env.STELLAR_NETWORK === "mainnet"
   : "Test SDF Network ; September 2015";
 
 // GET /api/auth?account=... -> Return a challenge transaction
-router.get("/", (req, res, next) => {
+router.get("/", (req, res) => {
   try {
     const accountId = req.query.account;
     if (!accountId) {
@@ -47,7 +47,7 @@ router.get("/", (req, res, next) => {
 });
 
 // POST /api/auth -> Receive signed transaction and issue JWT
-router.post("/", (req, res, next) => {
+router.post("/", (req, res) => {
   try {
     const { transaction } = req.body;
     if (!transaction) {

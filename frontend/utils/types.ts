@@ -42,7 +42,10 @@ export interface UserProfile {
   completedJobs: number;
   totalEarnedXLM: string;
   rating?: number;
+  /** Number of ratings received (when returned by profile API). */
+  ratingCount?: number;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface Rating {

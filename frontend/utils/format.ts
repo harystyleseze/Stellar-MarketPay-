@@ -4,7 +4,61 @@
  */
 
 import { format, formatDistanceToNow } from "date-fns";
-import type { JobStatus } from "./types";
+import type { Application, Job, JobStatus } from "./types";
+
+function escapeCsvCell(value: string): string {
+  if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function downloadCsv(filename: string, rows: string[][]): void {
+  const lines = rows.map((row) => row.map((cell) => escapeCsvCell(String(cell))).join(","));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Client-side CSV download for dashboard "Jobs Posted" export. */
+export function exportJobsToCSV(jobs: Job[]): void {
+  const header = [
+    "id",
+    "title",
+    "status",
+    "category",
+    "budget",
+    "skills",
+    "applicantCount",
+    "createdAt",
+  ];
+  const rows: string[][] = [header];
+  for (const j of jobs) {
+    rows.push([
+      j.id,
+      j.title,
+      j.status,
+      j.category,
+      j.budget,
+      j.skills.join("; "),
+      String(j.applicantCount),
+      j.createdAt,
+    ]);
+  }
+  downloadCsv(`marketpay-jobs-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+/** Client-side CSV download for dashboard applications export. */
+export function exportApplicationsToCSV(applications: Application[]): void {
+  const header = ["id", "jobId", "status", "bidAmount", "proposal", "createdAt"];
+  const rows: string[][] = [header];
+  for (const a of applications) {
+    rows.push([a.id, a.jobId, a.status, a.bidAmount, a.proposal, a.createdAt]);
+  }
+  downloadCsv(`marketpay-applications-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
 
 export function formatXLM(amount: string | number, decimals = 4): string {
   const num = typeof amount === "string" ? parseFloat(amount) : amount;

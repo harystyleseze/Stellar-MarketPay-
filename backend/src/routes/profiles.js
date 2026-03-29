@@ -10,7 +10,6 @@ const profileUpdateRateLimiter = createRateLimiter(5, 1); // 5 profile updates p
 const generalProfileRateLimiter = createRateLimiter(30, 1); // 100 requests per minute for getting profiles
 
 const { getProfile, upsertProfile } = require("../services/profileService");
-const { verifyJWT } = require("../middleware/auth");
 
 router.get("/:publicKey", generalProfileRateLimiter ,(req, res, next) => {
   try { res.json({ success: true, data: getProfile(req.params.publicKey) }); }
