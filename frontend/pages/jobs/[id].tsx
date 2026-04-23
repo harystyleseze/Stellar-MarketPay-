@@ -308,18 +308,31 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
             <h2 className="font-display text-xl font-bold text-amber-100">
               Applications ({applications.length})
             </h2>
-            {selectedApplications.size >= 2 && (
-              <button
-                onClick={() => setShowComparison(true)}
-                className="btn-primary text-sm py-2 px-4"
-              >
-                Compare Selected ({selectedApplications.size})
-              </button>
-            )}
+            <div className="hidden sm:flex items-center gap-3 text-[10px] text-amber-800 font-medium uppercase tracking-wider">
+              <span className="flex items-center gap-1"><kbd className="bg-ink-900 px-1.5 py-0.5 rounded border border-market-500/20 text-market-400">↑↓</kbd> Navigate</span>
+              <span className="flex items-center gap-1"><kbd className="bg-ink-900 px-1.5 py-0.5 rounded border border-market-500/20 text-market-400">Enter</kbd> Accept</span>
+            </div>
           </div>
           <div className="space-y-4">
             {applications.map((app) => (
-              <div key={app.id} className="card">
+              <div 
+                key={app.id} 
+                className="card focus-visible:ring-2 focus-visible:ring-market-400 focus:outline-none transition-all"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    (e.currentTarget.nextElementSibling as HTMLElement)?.focus();
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    (e.currentTarget.previousElementSibling as HTMLElement)?.focus();
+                  } else if (e.key === "Enter" && e.target === e.currentTarget) {
+                    if (app.status === "pending" && job.status === "open") {
+                      handleAcceptApplication(app.id);
+                    }
+                  }
+                }}
+              >
                 <div className="flex items-start justify-between gap-4 mb-3">
                   <div className="flex items-center gap-3">
                     <input
