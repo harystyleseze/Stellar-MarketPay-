@@ -6,6 +6,20 @@
 export type JobStatus = "open" | "in_progress" | "completed" | "cancelled";
 export type UserRole  = "client" | "freelancer" | "both";
 export type Currency  = "XLM" | "USDC";
+export type PortfolioItemType = "github" | "live" | "stellar_tx";
+export type AvailabilityStatus = "available" | "busy" | "unavailable";
+
+export interface PortfolioItem {
+  title: string;
+  url: string;
+  type: PortfolioItemType;
+}
+
+export interface Availability {
+  availableFrom?: string;
+  availableUntil?: string;
+  status: AvailabilityStatus;
+}
 
 export interface Job {
   id: string;
@@ -26,16 +40,20 @@ export interface Job {
   createdAt: string;
   updatedAt: string;
   deadline?: string;
+  timezone?: string;     // IANA timezone string (e.g., "America/New_York")
+  screeningQuestions?: string[];  // Up to 5 screening questions
 }
 
 export interface Application {
   id: string;
   jobId: string;
   freelancerAddress: string;
+  freelancerTier?: FreelancerTier;
   proposal: string;
   bidAmount: string;     // Amount as string
   currency: Currency;    // XLM or USDC
   status: "pending" | "accepted" | "rejected";
+  screeningAnswers?: Record<string, string>;  // Question -> Answer mapping
   createdAt: string;
 }
 
@@ -44,10 +62,13 @@ export interface UserProfile {
   displayName?: string;
   bio?: string;
   skills?: string[];
+  portfolioItems?: PortfolioItem[];
+  availability?: Availability | null;
   role: UserRole;
   completedJobs: number;
   totalEarnedXLM: string;
   rating?: number;
+  tier?: FreelancerTier;
   /** Number of ratings received (when returned by profile API). */
   ratingCount?: number;
   createdAt: string;
