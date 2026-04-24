@@ -3,7 +3,7 @@
 * Browse all open jobs with category filtering.
 */
 import JobCard, { JobCardSkeleton } from "@/components/JobCard";
-import { fetchJobs } from "@/lib/api";
+import { fetchJobs, fetchRecommendedJobs } from "@/lib/api";
 import { JOB_CATEGORIES, CATEGORY_ICONS } from "@/utils/format";
 import type { Job } from "@/utils/types";
 import clsx from "clsx";
@@ -12,9 +12,11 @@ import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import { getTimezoneOffset, toZonedTime } from "date-fns-tz";
 
-export default function JobsPage() {
+export default function JobsPage({ publicKey }: { publicKey?: string | null }) {
   const router = useRouter();
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [recommended, setRecommended] = useState<(Job & { matchScore: number })[]>([]);
+  const [recLoading, setRecLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +40,16 @@ export default function JobsPage() {
     const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     setUserTimezone(detectedTz);
   }, []);
+
+  // Fetch recommended jobs when wallet is connected
+  useEffect(() => {
+    if (!publicKey) { setRecommended([]); return; }
+    setRecLoading(true);
+    fetchRecommendedJobs(publicKey)
+      .then(setRecommended)
+      .catch(() => setRecommended([]))
+      .finally(() => setRecLoading(false));
+  }, [publicKey]);
 
   // Handle geolocation-based timezone detection
   const handleGeolocation = () => {
@@ -204,6 +216,31 @@ export default function JobsPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 animate-fade-in">
+
+      {/* Recommended for you */}
+      {publicKey && (recLoading || recommended.length > 0) && (
+        <div className="mb-10">
+          <h2 className="font-display text-xl font-bold text-amber-100 mb-4">Recommended for you</h2>
+          {recLoading ? (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {Array.from({ length: 3 }).map((_, i) => <JobCardSkeleton key={`rec-skeleton-${i}`} />)}
+            </div>
+          ) : (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {recommended.map((job) => (
+                <div key={job.id} className="relative">
+                  <JobCard job={job} />
+                  {job.matchScore > 0 && (
+                    <span className="absolute top-3 right-3 bg-market-500/20 text-market-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-market-500/30">
+                      {job.matchScore}% match
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">

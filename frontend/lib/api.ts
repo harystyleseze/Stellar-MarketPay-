@@ -415,3 +415,12 @@ export async function fetchRatings(publicKey: string) {
   const { data } = await api.get<{ success: boolean; data: Rating[] }>(`/api/ratings/${publicKey}`);
   return data.data;
 }
+
+// ─── Recommendations ──────────────────────────────────────────────────────────
+
+export async function fetchRecommendedJobs(publicKey: string): Promise<(Job & { matchScore: number })[]> {
+  const { data } = await api.get<{ success: boolean; data: (Job & { matchScore: number })[] }>(
+    `/api/jobs/recommended/${encodeURIComponent(publicKey)}`
+  );
+  return data.data;
+}
