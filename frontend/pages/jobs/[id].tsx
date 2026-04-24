@@ -11,7 +11,8 @@ import FreelancerTierBadge from "@/components/FreelancerTierBadge";
 import WalletConnect from "@/components/WalletConnect";
 import RatingForm from "@/components/RatingForm";
 import ShareJobModal from "@/components/ShareJobModal";
-import { fetchJob, fetchApplications, acceptApplication, releaseEscrow } from "@/lib/api";
+import clsx from "clsx";
+import { fetchJob, fetchApplications, acceptApplication, releaseEscrow, fetchProfile } from "@/lib/api";
 import { formatXLM, timeAgo, formatDate, shortenAddress, statusLabel, statusClass } from "@/utils/format";
 import {
   accountUrl,
@@ -51,6 +52,16 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [prefillData, setPrefillData] = useState<any>(null);
+  const [expandedProposals, setExpandedProposals] = useState<Set<string>>(new Set());
+
+  const toggleProposalExpand = (appId: string) => {
+    setExpandedProposals((prev) => {
+      const next = new Set(prev);
+      if (next.has(appId)) next.delete(appId);
+      else next.add(appId);
+      return next;
+    });
+  };
 
   const isClient = publicKey && job?.clientAddress === publicKey;
   const isFreelancer = publicKey && job?.freelancerAddress === publicKey;
@@ -338,9 +349,9 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
           </div>
           <div className="space-y-4">
             {applications.map((app) => (
-              <div 
-                key={app.id} 
-                className="card focus-visible:ring-2 focus-visible:ring-market-400 focus:outline-none transition-all"
+              <div
+                key={app.id}
+                className="card-hover group focus-visible:ring-2 focus-visible:ring-market-400 focus:outline-none"
                 tabIndex={0}
                 onKeyDown={(e) => {
                   if (e.key === "ArrowDown") {
@@ -356,34 +367,67 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
                   }
                 }}
               >
-                <div className="flex items-start justify-between gap-4 mb-3">
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      checked={selectedApplications.has(app.id)}
-                      onChange={() => handleToggleSelection(app.id)}
-                      disabled={
-                        !selectedApplications.has(app.id) && selectedApplications.size >= 3
-                      }
-                      className="w-4 h-4 rounded border-market-500/30 bg-market-500/10 text-market-400 focus:ring-market-500/50 cursor-pointer"
-                    />
-                    <a href={accountUrl(app.freelancerAddress)} target="_blank" rel="noopener noreferrer"
-                      className="address-tag hover:border-market-500/40 transition-colors">
-                      {shortenAddress(app.freelancerAddress)} ↗
-                    </a>
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedApplications.has(app.id)}
+                        onChange={() => handleToggleSelection(app.id)}
+                        disabled={!selectedApplications.has(app.id) && selectedApplications.size >= 3}
+                        className="w-4 h-4 rounded border-market-500/30 bg-market-500/10 text-market-400 focus:ring-market-500/50 cursor-pointer"
+                      />
+                      <a
+                        href={accountUrl(app.freelancerAddress)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="address-tag hover:border-market-500/40 transition-colors"
+                      >
+                        {shortenAddress(app.freelancerAddress)} ↗
+                      </a>
+                    </div>
+                    <p className="text-xs text-amber-800 mt-2">
+                      Applied {timeAgo(app.createdAt)}
+                    </p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-market-400 font-semibold text-sm">{formatXLM(app.bidAmount)}</span>
-                    <span className={clsx("text-xs px-2.5 py-1 rounded-full border",
-                      app.status === "accepted" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
-                      app.status === "rejected" ? "bg-red-500/10 text-red-400 border-red-500/20" :
-                      "bg-market-500/10 text-market-400 border-market-500/20"
-                    )}>{app.status}</span>
+
+                  <div className="flex-shrink-0 flex items-center gap-3 sm:flex-col sm:items-end sm:gap-2">
+                    <span className="font-mono text-market-400 font-semibold text-sm">
+                      {formatXLM(app.bidAmount)}
+                    </span>
+                    <span
+                      className={clsx(
+                        "text-xs px-2.5 py-1 rounded-full border",
+                        app.status === "accepted"
+                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                          : app.status === "rejected"
+                            ? "bg-red-500/10 text-red-400 border-red-500/20"
+                            : "bg-market-500/10 text-market-400 border-market-500/20"
+                      )}
+                    >
+                      {app.status}
+                    </span>
                   </div>
                 </div>
-                <p className="text-amber-700/80 text-sm leading-relaxed mb-4">{app.proposal}</p>
-                
-                {/* Screening Answers */}
+
+                <div className="mt-4 pt-4 border-t border-market-500/10">
+                  <p className="text-amber-700/80 text-sm leading-relaxed">
+                    {expandedProposals.has(app.id)
+                      ? app.proposal
+                      : app.proposal.length > 150
+                        ? `${app.proposal.substring(0, 150)}...`
+                        : app.proposal}
+                  </p>
+                  {app.proposal.length > 150 && (
+                    <button
+                      onClick={() => toggleProposalExpand(app.id)}
+                      className="text-xs text-market-400 hover:text-market-300 mt-2 font-medium transition-colors"
+                    >
+                      {expandedProposals.has(app.id) ? "Show less" : "Read full proposal"}
+                    </button>
+                  )}
+                </div>
+
                 {app.screeningAnswers && Object.keys(app.screeningAnswers).length > 0 && (
                   <div className="mt-4 pt-4 border-t border-market-500/10">
                     <h4 className="text-xs font-semibold text-amber-800 uppercase tracking-wider mb-3">Screening Question Answers</h4>
@@ -397,11 +441,19 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
                     </div>
                   </div>
                 )}
-                
+
                 {app.status === "pending" && job.status === "open" && (
-                  <button onClick={() => handleAcceptApplication(app.id)} className="btn-secondary text-sm py-2 px-4 mt-4">
-                    Accept Proposal
-                  </button>
+                  <div className="flex gap-3 mt-4 pt-4 border-t border-market-500/10 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
+                    <button
+                      onClick={() => handleAcceptApplication(app.id)}
+                      className="btn-primary text-sm py-2 px-4"
+                    >
+                      Accept
+                    </button>
+                    <button className="btn-ghost text-sm py-2 px-4 text-red-400/70 hover:text-red-400 hover:bg-red-500/8">
+                      Reject
+                    </button>
+                  </div>
                 )}
               </div>
             ))}
@@ -462,9 +514,9 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
                 const availability = applicantProfile?.availability;
 
                 return (
-                  <div key={application.id} className="card">
-                    <div className="flex items-start justify-between gap-4 mb-3">
-                      <div>
+                  <div key={application.id} className="card-hover group">
+                    <div className="flex flex-col sm:flex-row gap-4">
+                      <div className="flex-1 min-w-0">
                         <a
                           href={accountUrl(application.freelancerAddress)}
                           target="_blank"
@@ -473,6 +525,9 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
                         >
                           {shortenAddress(application.freelancerAddress)} ↗
                         </a>
+                        <p className="text-xs text-amber-800 mt-2">
+                          Applied {timeAgo(application.createdAt)}
+                        </p>
                         <div className="mt-3">
                           <span
                             className={clsx(
@@ -488,7 +543,7 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-3">
+                      <div className="flex-shrink-0 flex items-center gap-3 sm:flex-col sm:items-end sm:gap-2">
                         <span className="font-mono text-market-400 font-semibold text-sm">
                           {formatXLM(application.bidAmount)}
                         </span>
@@ -507,15 +562,36 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
                       </div>
                     </div>
 
-                    <p className="text-amber-700/80 text-sm leading-relaxed mb-4">{application.proposal}</p>
+                    <div className="mt-4 pt-4 border-t border-market-500/10">
+                      <p className="text-amber-700/80 text-sm leading-relaxed">
+                        {expandedProposals.has(application.id)
+                          ? application.proposal
+                          : application.proposal.length > 150
+                            ? `${application.proposal.substring(0, 150)}...`
+                            : application.proposal}
+                      </p>
+                      {application.proposal.length > 150 && (
+                        <button
+                          onClick={() => toggleProposalExpand(application.id)}
+                          className="text-xs text-market-400 hover:text-market-300 mt-2 font-medium transition-colors"
+                        >
+                          {expandedProposals.has(application.id) ? "Show less" : "Read full proposal"}
+                        </button>
+                      )}
+                    </div>
 
                     {application.status === "pending" && job.status === "open" && (
-                      <button
-                        onClick={() => handleAcceptApplication(application.id)}
-                        className="btn-secondary text-sm py-2 px-4"
-                      >
-                        Accept Proposal
-                      </button>
+                      <div className="flex gap-3 mt-4 pt-4 border-t border-market-500/10 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
+                        <button
+                          onClick={() => handleAcceptApplication(application.id)}
+                          className="btn-primary text-sm py-2 px-4"
+                        >
+                          Accept
+                        </button>
+                        <button className="btn-ghost text-sm py-2 px-4 text-red-400/70 hover:text-red-400 hover:bg-red-500/8">
+                          Reject
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
