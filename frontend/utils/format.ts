@@ -183,3 +183,44 @@ export function getMonthlyEstimate(xlmAmount: string | number, xlmPriceUsd: numb
   const monthlyUsd = (num * xlmPriceUsd).toFixed(2);
   return `$${monthlyUsd}/mo est.`;
 }
+
+export interface ProgressData {
+  percentage: number;
+  daysRemaining: number;
+  colorClass: string;
+}
+
+/**
+ * Calculates job progress for in-progress jobs with a deadline.
+ * Returns null if the job is not in progress or has no deadline.
+ */
+export function calculateJobProgress(job: Job): ProgressData | null {
+  if (job.status !== "in_progress" || !job.deadline) return null;
+
+  const start = new Date(job.updatedAt).getTime();
+  const end = new Date(job.deadline).getTime();
+  const now = Date.now();
+
+  const total = end - start;
+  if (total <= 0) {
+    return {
+      percentage: 100,
+      daysRemaining: 0,
+      colorClass: "bg-red-500",
+    };
+  }
+
+  const elapsed = now - start;
+  const percentage = Math.min(100, Math.max(0, (elapsed / total) * 100));
+
+  const daysRemaining = Math.max(0, Math.ceil((end - now) / (1000 * 60 * 60 * 24)));
+
+  let colorClass = "bg-emerald-500"; // green
+  if (percentage > 80) {
+    colorClass = "bg-red-500";
+  } else if (percentage >= 50) {
+    colorClass = "bg-amber-500";
+  }
+
+  return { percentage, daysRemaining, colorClass };
+}
