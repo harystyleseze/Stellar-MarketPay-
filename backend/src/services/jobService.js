@@ -9,7 +9,7 @@ import { getTimezoneOffset } from "date-fns-tz";
 
 // ─── constants ───────────────────────────────────────────────────────────────
 
-const VALID_STATUSES = ["open", "in_progress", "completed", "cancelled"];
+const VALID_STATUSES = ["open", "in_progress", "completed", "cancelled", "disputed"];
 
 const VALID_CATEGORIES = [
   "Smart Contracts",
@@ -86,6 +86,10 @@ function rowToJob(row) {
     deadline:          row.deadline,
     timezone:          row.timezone,
     screeningQuestions: row.screening_questions || [],
+    disputeReason:      row.dispute_reason,
+    disputeDescription: row.dispute_description,
+    disputedBy:         row.disputed_by,
+    disputedAt:         row.disputed_at,
     createdAt:         row.created_at,
     updatedAt:         row.updated_at,
   };
@@ -333,6 +337,48 @@ async function incrementShareCount(jobId) {
   return rowToJob(rows[0]);
 }
 
+async function raiseDispute(jobId, { reason, description, raisedBy }) {
+  const { rows } = await query(
+    `UPDATE jobs 
+     SET status = 'disputed', 
+         dispute_reason = $1, 
+         dispute_description = $2, 
+         disputed_by = $3, 
+         disputed_at = NOW(), 
+         updated_at = NOW() 
+     WHERE id = $4 AND status = 'in_progress'
+     RETURNING *`,
+    [reason, description, raisedBy, jobId]
+  );
+
+  if (!rows.length) {
+    const e = new Error("Job not found or not in progress"); e.status = 404; throw e;
+  }
+
+  return rowToJob(rows[0]);
+}
+
+async function resolveDispute(jobId) {
+  const { rows } = await query(
+    `UPDATE jobs 
+     SET status = 'in_progress', 
+         dispute_reason = NULL, 
+         dispute_description = NULL, 
+         disputed_by = NULL, 
+         disputed_at = NULL, 
+         updated_at = NOW() 
+     WHERE id = $1 AND status = 'disputed'
+     RETURNING *`,
+    [jobId]
+  );
+
+  if (!rows.length) {
+    const e = new Error("Job not found or not disputed"); e.status = 404; throw e;
+  }
+
+  return rowToJob(rows[0]);
+}
+
 export default {
   createJob,
   getJob,
@@ -344,4 +390,6 @@ export default {
   deleteJob,
   boostJob,
   incrementShareCount,
+  raiseDispute,
+  resolveDispute,
 };

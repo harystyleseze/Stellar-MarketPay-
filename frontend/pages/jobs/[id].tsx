@@ -11,7 +11,7 @@ import FreelancerTierBadge from "@/components/FreelancerTierBadge";
 import WalletConnect from "@/components/WalletConnect";
 import RatingForm from "@/components/RatingForm";
 import ShareJobModal from "@/components/ShareJobModal";
-import { fetchJob, fetchApplications, acceptApplication, releaseEscrow } from "@/lib/api";
+import { fetchJob, fetchApplications, acceptApplication, releaseEscrow, raiseDispute, resolveDispute } from "@/lib/api";
 import { formatXLM, timeAgo, formatDate, shortenAddress, statusLabel, statusClass } from "@/utils/format";
 import {
   accountUrl,
@@ -51,6 +51,11 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [prefillData, setPrefillData] = useState<any>(null);
+  const [showDisputeModal, setShowDisputeModal] = useState(false);
+  const [disputeReason, setDisputeReason] = useState("");
+  const [disputeDescription, setDisputeDescription] = useState("");
+  const [raisingDispute, setRaisingDispute] = useState(false);
+  const [resolvingDispute, setResolvingDispute] = useState(false);
 
   const isClient = publicKey && job?.clientAddress === publicKey;
   const isFreelancer = publicKey && job?.freelancerAddress === publicKey;
@@ -192,6 +197,28 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
     }
   };
 
+  const handleRaiseDispute = async () => {
+    if (!publicKey || !job) return;
+    if (!disputeReason || !disputeDescription) {
+      setActionError("Please provide both a reason and a description.");
+      return;
+    }
+
+    setRaisingDispute(true);
+    setActionError(null);
+
+    try {
+      await raiseDispute(job.id, { reason: disputeReason, description: disputeDescription });
+      const refreshedJob = await fetchJob(job.id);
+      setJob(refreshedJob);
+      setShowDisputeModal(false);
+    } catch (e: any) {
+      setActionError(e.response?.data?.error || "Failed to raise dispute.");
+    } finally {
+      setRaisingDispute(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-10 animate-pulse">
@@ -231,6 +258,42 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
         <Link href="/jobs" className="inline-flex items-center gap-1.5 text-sm text-amber-800 hover:text-amber-400 transition-colors mb-6">
           ← Back to Jobs
         </Link>
+
+        {/* Dispute Banner */}
+        {job.status === "disputed" && (
+          <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-4 mb-6 flex items-start gap-4">
+            <div className="w-10 h-10 rounded-full bg-indigo-500/20 flex items-center justify-center flex-shrink-0 text-indigo-400">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+            </div>
+            <div className="flex-1">
+              <h3 className="text-sm font-bold text-indigo-100 uppercase tracking-wider mb-1">Under Dispute</h3>
+              <p className="text-xs text-indigo-400/80 leading-relaxed">
+                This job has been flagged for admin review. Escrow release is currently blocked.
+                <br />
+                <span className="font-semibold mt-1 inline-block">Reason: {job.disputeReason}</span>
+              </p>
+              {publicKey === process.env.NEXT_PUBLIC_ADMIN_ADDRESS && (
+                <button 
+                  onClick={async () => {
+                    setResolvingDispute(true);
+                    try {
+                      await resolveDispute(job.id);
+                      setJob(await fetchJob(job.id));
+                    } catch (e) {
+                      setActionError("Failed to resolve dispute");
+                    } finally {
+                      setResolvingDispute(false);
+                    }
+                  }}
+                  disabled={resolvingDispute}
+                  className="mt-3 btn-secondary py-1.5 px-3 text-xs flex items-center gap-2"
+                >
+                  {resolvingDispute ? <Spinner /> : "Resolve Dispute (Admin)"}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Job header */}
         <div className="card mb-6">
@@ -558,6 +621,41 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
           </div>
         )}
 
+      {/* Management section (job in progress) */}
+      {(job.status === "in_progress" || job.status === "disputed") && (isClient || isFreelancer) && (
+        <div className="mt-6 card border-market-500/20 bg-market-500/5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="font-display text-lg font-bold text-amber-100 mb-1">Job Management</h3>
+              <p className="text-sm text-amber-800">
+                {job.status === "disputed" 
+                  ? "This job is currently under dispute. Admin review is required." 
+                  : "Manage the project and escrow payments."}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {isClient && job.status === "in_progress" && (
+                <button
+                  onClick={handleReleaseEscrow}
+                  disabled={releasingEscrow}
+                  className="btn-primary py-2 px-5 text-sm flex items-center gap-2"
+                >
+                  {releasingEscrow ? <Spinner /> : "Release Escrow"}
+                </button>
+              )}
+              {job.status === "in_progress" && (
+                <button
+                  onClick={() => setShowDisputeModal(true)}
+                  className="btn-secondary py-2 px-5 text-sm"
+                >
+                  Raise Dispute
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Rating section (job completed) */}
       {job.status === "completed" && publicKey && !ratingSubmitted && (
         <div className="mt-6">
@@ -766,6 +864,63 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
           job={job}
           onClose={() => setShowShareModal(false)}
         />
+      )}
+
+      {/* Dispute Modal */}
+      {showDisputeModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6">
+          <div className="absolute inset-0 bg-ink-950/80 backdrop-blur-sm" onClick={() => setShowDisputeModal(false)} />
+          <div className="relative w-full max-w-md bg-ink-900 border border-market-500/20 rounded-2xl p-6 shadow-2xl animate-scale-in">
+            <h3 className="font-display text-xl font-bold text-amber-100 mb-2">Raise a Dispute</h3>
+            <p className="text-sm text-amber-800 mb-6">Flag this job for admin review. This will block escrow release until resolved.</p>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="label">Reason</label>
+                <select 
+                  value={disputeReason} 
+                  onChange={(e) => setDisputeReason(e.target.value)}
+                  className="input-field"
+                >
+                  <option value="">Select a reason</option>
+                  <option value="Quality of work">Quality of work</option>
+                  <option value="Non-delivery">Non-delivery</option>
+                  <option value="Communication issues">Communication issues</option>
+                  <option value="Unfair terms">Unfair terms</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Description</label>
+                <textarea 
+                  value={disputeDescription}
+                  onChange={(e) => setDisputeDescription(e.target.value)}
+                  placeholder="Explain the issue in detail..."
+                  rows={4}
+                  className="textarea-field"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-8">
+              <button 
+                onClick={() => setShowDisputeModal(false)} 
+                className="flex-1 btn-secondary py-2.5"
+                disabled={raisingDispute}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleRaiseDispute} 
+                className="flex-1 btn-primary py-2.5 flex items-center justify-center gap-2"
+                disabled={raisingDispute || !disputeReason || !disputeDescription}
+              >
+                {raisingDispute ? <Spinner /> : "Raise Dispute"}
+              </button>
+            </div>
+            {actionError && <p className="mt-3 text-red-400 text-sm text-center">{actionError}</p>}
+          </div>
+        </div>
       )}
     </>
   );

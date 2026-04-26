@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   deadline            TIMESTAMPTZ,
   timezone            TEXT,
   screening_questions TEXT[]      NOT NULL DEFAULT '{}',
+  dispute_reason      TEXT,
+  dispute_description TEXT,
+  disputed_by         TEXT        REFERENCES profiles(public_key),
+  disputed_at         TIMESTAMPTZ,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
