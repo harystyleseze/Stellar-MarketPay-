@@ -382,21 +382,54 @@ export default function PostJobForm({ publicKey }: PostJobFormProps) {
             }}
           />
         
-          {/* Character Counter */}
-          <p
-            id="description-counter"
-            className={clsx(
-              "mt-1 text-xs font-medium",
-              form.description.trim().length < 30 && "text-red-400",
-              form.description.trim().length >= 30 &&
-                form.description.trim().length <= 100 &&
-                "text-amber-400",
-              form.description.trim().length > 100 && "text-green-400"
-            )}
-          >
-            {form.description.length} / 2000
-          </p>
-        
+          {/* Character Counter + Word Count Quality Indicator (Issue #148) */}
+          {(() => {
+            const wordCount = form.description.trim() === ""
+              ? 0
+              : form.description.trim().split(/\s+/).length;
+            const quality: "too_short" | "good" | "detailed" =
+              wordCount < 30 ? "too_short" : wordCount <= 80 ? "good" : "detailed";
+            const qualityLabel =
+              quality === "too_short" ? "Too short"
+              : quality === "good" ? "Good"
+              : "Detailed";
+            const qualityClass =
+              quality === "too_short"
+                ? "bg-red-500/10 text-red-400 border-red-500/20"
+                : quality === "good"
+                  ? "bg-amber-500/10 text-amber-300 border-amber-500/20"
+                  : "bg-green-500/10 text-green-400 border-green-500/20";
+
+            return (
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <p
+                  id="description-counter"
+                  className={clsx(
+                    "text-xs font-medium",
+                    form.description.trim().length < 30 && "text-red-400",
+                    form.description.trim().length >= 30 &&
+                      form.description.trim().length <= 100 &&
+                      "text-amber-400",
+                    form.description.trim().length > 100 && "text-green-400"
+                  )}
+                >
+                  {form.description.length} / 2000
+                </p>
+                <p className="text-xs font-medium text-amber-800/80">
+                  {wordCount} {wordCount === 1 ? "word" : "words"}
+                </p>
+                <span
+                  className={clsx(
+                    "text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border font-semibold",
+                    qualityClass
+                  )}
+                >
+                  {qualityLabel}
+                </span>
+              </div>
+            );
+          })()}
+
           {/* Inline Error */}
           {form.description.length > 0 && form.description.trim().length < 30 && (
             <p
