@@ -158,6 +158,7 @@ export async function fetchJob(id: string) {
  */
 export async function createJob(payload: {
   title: string; description: string; budget: string;
+  currency?: string;
   category: string; skills: string[]; deadline?: string;
   timezone?: string;
   clientAddress: string;
@@ -177,6 +178,19 @@ export async function createJob(payload: {
  */
 export async function fetchMyJobs(publicKey: string) {
   const { data } = await api.get<{ success: boolean; data: Job[] }>(`/api/jobs/client/${publicKey}`);
+  return data.data;
+}
+
+/**
+ * Evaluates application quality using AI (Claude API).
+ * 
+ * @param jobId Job identifier.
+ * @returns Array of scores and reasonings for all applications.
+ */
+export async function scoreProposals(jobId: string) {
+  const { data } = await api.post<{ success: boolean; data: { id: string; score: number; reasoning: string }[] }>(
+    `/api/jobs/${jobId}/score-proposals`
+  );
   return data.data;
 }
 
@@ -322,6 +336,21 @@ export async function updateProfileAvailability(
   const { data } = await api.post<{ success: boolean; data: UserProfile }>(
     `/api/profiles/${encodeURIComponent(publicKey)}/availability`,
     payload
+  );
+  return data.data;
+}
+
+/**
+ * Verifies a user's identity via a DID provider and stores the resulting credential hash.
+ * 
+ * @param publicKey User Stellar public key.
+ * @param didHash The credential hash/DID URI returned by the provider.
+ * @returns The updated profile.
+ */
+export async function verifyIdentity(publicKey: string, didHash: string) {
+  const { data } = await api.post<{ success: boolean; data: UserProfile }>(
+    `/api/profiles/${encodeURIComponent(publicKey)}/verify`,
+    { didHash }
   );
   return data.data;
 }

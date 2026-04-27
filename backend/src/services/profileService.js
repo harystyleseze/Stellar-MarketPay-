@@ -1,6 +1,14 @@
 /**
  * src/services/profileService.js
- * All data persisted in the `profiles` PostgreSQL table.
+ *
+ * Profiles service — owns all reads and writes against the `profiles`
+ * PostgreSQL table. Validates portfolio items and availability blocks,
+ * upserts profile metadata keyed by Stellar public key, computes a
+ * derived reputation score (rating + accept/release latency) on read,
+ * derives a freelancer tier label, and records optional DID/KYC
+ * verification.
+ *
+ * @module services/profileService
  */
 "use strict";
 
@@ -11,6 +19,63 @@ const VALID_PORTFOLIO_TYPES = ["github", "live", "stellar_tx"];
 const VALID_AVAILABILITY_STATUSES = ["available", "busy", "unavailable"];
 const MAX_PORTFOLIO_ITEMS = 10;
 
+/**
+ * Camel-cased profile record returned by this service.
+ *
+ * @typedef {Object} UserProfile
+ * @property {string}     publicKey         Stellar G-address (primary key).
+ * @property {string|null} displayName
+ * @property {string|null} bio
+ * @property {string[]}   skills
+ * @property {PortfolioItem[]} portfolioItems
+ * @property {Availability|null} availability
+ * @property {("client"|"freelancer"|"both")} role
+ * @property {number}     completedJobs
+ * @property {string}     totalEarnedXLM    Fixed-point string.
+ * @property {number|null} rating           Average rating (1..5), null until rated.
+ * @property {string|null} didHash          Optional DID hash from identity verification.
+ * @property {boolean|null} isKycVerified   True after a successful `verifyIdentity` call.
+ * @property {number}     [ratingCount]     Number of ratings (only on getProfile result).
+ * @property {number}     [reputationScore] Derived score 0..100 (only on getProfile result).
+ * @property {{ avgAcceptHours: number, avgReleaseHours: number }} [reputationMetrics]
+ * @property {string}     createdAt
+ * @property {string}     updatedAt
+ */
+
+/**
+ * @typedef {Object} PortfolioItem
+ * @property {string} title
+ * @property {("github"|"live"|"stellar_tx")} type
+ * @property {string} url
+ */
+
+/**
+ * @typedef {Object} Availability
+ * @property {("available"|"busy"|"unavailable")} status
+ * @property {string} [availableFrom]   ISO timestamp.
+ * @property {string} [availableUntil]  ISO timestamp.
+ */
+
+/**
+ * Input shape accepted by {@link upsertProfile}.
+ *
+ * @typedef {Object} UpsertProfileInput
+ * @property {string}            publicKey
+ * @property {string}            [displayName]
+ * @property {string}            [bio]
+ * @property {string[]}          [skills]
+ * @property {PortfolioItem[]}   [portfolioItems]
+ * @property {Availability}      [availability]
+ * @property {("client"|"freelancer"|"both")} [role]
+ */
+
+/**
+ * Throws a 400 Error when `key` is not a valid Stellar G-address.
+ *
+ * @param {string} key
+ * @returns {void}
+ * @throws {Error} `status === 400` if the key fails the G-address regex.
+ */
 function validatePublicKey(key) {
   if (!key || !/^G[A-Z0-9]{55}$/.test(key)) {
     const e = new Error("Invalid Stellar public key");
@@ -125,6 +190,12 @@ function validateAvailability(availability) {
   };
 }
 
+/**
+ * Convert a snake_case `profiles` row into the camelCase API object.
+ *
+ * @param {Object} row
+ * @returns {UserProfile}
+ */
 function rowToProfile(row) {
   return {
     publicKey: row.public_key,
@@ -137,11 +208,47 @@ function rowToProfile(row) {
     completedJobs: row.completed_jobs,
     totalEarnedXLM: row.total_earned_xlm,
     rating: row.rating !== null ? parseFloat(row.rating) : null,
+    didHash: row.did_hash,
+    isKycVerified: row.is_kyc_verified,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
+/**
+ * Derive a freelancer tier label from completed-jobs count and average rating.
+ *
+ * Tiers (highest first):
+ * - **Top Talent** — ≥30 completed jobs and rating ≥4.8
+ * - **Expert** — ≥15 completed jobs and rating ≥4.5
+ * - **Rising Star** — ≥5 completed jobs (rating not required)
+ * - **Newcomer** — anyone else
+ *
+ * @param {number} [completedJobs=0]   Number of completed jobs for the freelancer.
+ * @param {number|null} [rating=null]  Average rating (1..5), or null if unrated.
+ * @returns {("Top Talent"|"Expert"|"Rising Star"|"Newcomer")}
+ */
+function calculateFreelancerTier(completedJobs = 0, rating = null) {
+  const jobs = Number(completedJobs) || 0;
+  const safeRating = rating === null || rating === undefined ? null : Number(rating);
+
+  if (jobs >= 30 && safeRating !== null && safeRating >= 4.8) return "Top Talent";
+  if (jobs >= 15 && safeRating !== null && safeRating >= 4.5) return "Expert";
+  if (jobs >= 5) return "Rising Star";
+  return "Newcomer";
+}
+
+/**
+ * Fetch a profile by public key, including aggregated rating data and a
+ * derived reputation score (0..100) computed from the rating, average
+ * acceptance latency, and average escrow-release latency.
+ *
+ * @param {string} publicKey  Stellar G-address.
+ * @returns {Promise<UserProfile>}  The profile, with `rating`, `ratingCount`,
+ *                                  `reputationScore`, and `reputationMetrics` populated.
+ * @throws {Error} 400 — invalid Stellar public key.
+ * @throws {Error} 404 — profile not found.
+ */
 async function getProfile(publicKey) {
   validatePublicKey(publicKey);
 
@@ -176,6 +283,7 @@ async function getProfile(publicKey) {
   const profile = rowToProfile(rows[0]);
   profile.rating = rows[0].avg_rating !== null ? parseFloat(rows[0].avg_rating) : null;
   profile.ratingCount = rows[0].rating_count;
+  profile.tier = calculateFreelancerTier(profile.completedJobs, profile.rating);
   
   // Calculate reputation score (simple formula: higher weight on ratings, lower on time)
   // Max score 100.
@@ -201,6 +309,29 @@ async function getProfile(publicKey) {
   return profile;
 }
 
+/**
+ * Insert or update a profile row keyed by `publicKey`.
+ *
+ * Empty-string fields fall back to the existing values via the SQL
+ * `NULLIF(EXCLUDED.field, '')` pattern, so a partial update will not
+ * blank out previously-saved data.
+ *
+ * @param {UpsertProfileInput} input
+ * @returns {Promise<UserProfile>}
+ * @throws {Error} 400 — invalid public key, role, portfolio items, or availability.
+ *
+ * @example
+ * const profile = await upsertProfile({
+ *   publicKey: "GABCDEF...XYZ",
+ *   displayName: "Ada",
+ *   bio: "Smart-contract auditor since 2019.",
+ *   skills: ["Rust", "Soroban", "Security Audit"],
+ *   portfolioItems: [
+ *     { title: "Escrow audit", type: "github", url: "https://github.com/ada/audit-x" },
+ *   ],
+ *   role: "freelancer",
+ * });
+ */
 async function upsertProfile({ publicKey, displayName, bio, skills, portfolioItems, availability, role }) {
   validatePublicKey(publicKey);
 
@@ -237,6 +368,15 @@ async function upsertProfile({ publicKey, displayName, bio, skills, portfolioIte
   return rowToProfile(rows[0]);
 }
 
+/**
+ * Update only the availability block on a profile, creating the profile row
+ * if it does not yet exist.
+ *
+ * @param {string}              publicKey     Stellar G-address.
+ * @param {Availability|null}   availability  New availability block, or null to clear.
+ * @returns {Promise<UserProfile>}
+ * @throws {Error} 400 — invalid public key or availability shape.
+ */
 async function updateAvailability(publicKey, availability) {
   validatePublicKey(publicKey);
   const safeAvailability = validateAvailability(availability);
@@ -256,10 +396,48 @@ async function updateAvailability(publicKey, availability) {
   return rowToProfile(rows[0]);
 }
 
+/**
+ * Record an identity-verification result on a profile. Sets `did_hash` and
+ * marks the profile `is_kyc_verified = TRUE`. The profile row must already
+ * exist — call {@link upsertProfile} first if needed.
+ *
+ * @param {string} publicKey  Stellar G-address.
+ * @param {string} didHash    DID hash returned by the verification provider.
+ * @returns {Promise<UserProfile>}
+ * @throws {Error} 400 — invalid public key, or `didHash` missing.
+ * @throws {Error} 404 — profile not found.
+ */
+async function verifyIdentity(publicKey, didHash) {
+  validatePublicKey(publicKey);
+  if (!didHash) throw createValidationError("didHash is required");
+
+  const { rows } = await pool.query(
+    `
+    UPDATE profiles
+    SET did_hash = $2,
+        is_kyc_verified = TRUE,
+        updated_at = NOW()
+    WHERE public_key = $1
+    RETURNING *
+    `,
+    [publicKey, didHash]
+  );
+
+  if (!rows.length) {
+    const e = new Error("Profile not found");
+    e.status = 404;
+    throw e;
+  }
+
+  return rowToProfile(rows[0]);
+}
+
 module.exports = {
   getProfile,
   upsertProfile,
   updateAvailability,
+  verifyIdentity,
+  calculateFreelancerTier,
   VALID_PORTFOLIO_TYPES,
   VALID_AVAILABILITY_STATUSES,
   MAX_PORTFOLIO_ITEMS,

@@ -28,7 +28,13 @@ export default function ApplicationForm({ job, publicKey, prefillData, onSuccess
   const [showConfirm, setShowConfirm] = useState(false);
   const [screeningAnswers, setScreeningAnswers] = useState<Record<string, string>>({});
 
-  const isValid = proposal.trim().length >= 50 && parseFloat(bidAmount) > 0;
+  // Issue #152 — enforce 50-word minimum on the proposal.
+  const wordCount = proposal.trim() === "" ? 0 : proposal.trim().split(/\s+/).length;
+  const MIN_WORDS = 50;
+  const wordsRemaining = Math.max(0, MIN_WORDS - wordCount);
+  const meetsWordMinimum = wordCount >= MIN_WORDS;
+
+  const isValid = meetsWordMinimum && parseFloat(bidAmount) > 0;
 
   // Initialize screening answers when job changes
   useEffect(() => {
@@ -88,9 +94,27 @@ export default function ApplicationForm({ job, publicKey, prefillData, onSuccess
               value={proposal} onChange={(e) => setProposal(e.target.value)}
               rows={6}
               placeholder="Describe your relevant experience, your approach to this project, and why you're the best fit..."
-              className="textarea-field"
+              className={clsx(
+                "textarea-field",
+                proposal.length > 0 && !meetsWordMinimum && "border-red-500/40"
+              )}
+              aria-invalid={proposal.length > 0 && !meetsWordMinimum}
+              aria-describedby="proposal-word-count"
             />
-            <p className="mt-1 text-xs text-amber-800/50">{proposal.length} chars (min 50)</p>
+            <p
+              id="proposal-word-count"
+              className={clsx(
+                "mt-1 text-xs font-medium",
+                meetsWordMinimum ? "text-green-400" : "text-red-400"
+              )}
+            >
+              {wordCount} {wordCount === 1 ? "word" : "words"} (minimum {MIN_WORDS})
+              {!meetsWordMinimum && (
+                <span className="ml-1 text-amber-800/80 font-normal">
+                  — {wordsRemaining} more {wordsRemaining === 1 ? "word" : "words"} needed
+                </span>
+              )}
+            </p>
           </div>
 
           {/* Bid amount */}
