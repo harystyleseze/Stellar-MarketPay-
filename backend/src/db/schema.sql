@@ -24,6 +24,10 @@ ALTER TABLE profiles
 ALTER TABLE profiles
   ADD COLUMN IF NOT EXISTS availability JSONB;
 
+ALTER TABLE profiles
+  ADD COLUMN IF NOT EXISTS did_hash TEXT,
+  ADD COLUMN IF NOT EXISTS is_kyc_verified BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- ─────────────────────────────────────────
 -- jobs
 -- ─────────────────────────────────────────
@@ -51,6 +55,14 @@ CREATE INDEX IF NOT EXISTS jobs_category_idx        ON jobs(category);
 CREATE INDEX IF NOT EXISTS jobs_client_address_idx  ON jobs(client_address);
 CREATE INDEX IF NOT EXISTS jobs_created_at_idx      ON jobs(created_at DESC);
 
+ALTER TABLE jobs
+  ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'XLM',
+  ADD COLUMN IF NOT EXISTS share_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS boosted BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS boosted_until TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS timezone TEXT,
+  ADD COLUMN IF NOT EXISTS screening_questions TEXT[] NOT NULL DEFAULT '{}';
+
 -- ─────────────────────────────────────────
 -- applications
 -- ─────────────────────────────────────────
@@ -68,6 +80,10 @@ CREATE TABLE IF NOT EXISTS applications (
 
 CREATE INDEX IF NOT EXISTS applications_job_id_idx             ON applications(job_id);
 CREATE INDEX IF NOT EXISTS applications_freelancer_address_idx ON applications(freelancer_address);
+
+ALTER TABLE applications
+  ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'XLM',
+  ADD COLUMN IF NOT EXISTS screening_answers JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- ─────────────────────────────────────────
 -- escrows  (schema only; populated by smart-contract layer)
@@ -112,3 +128,65 @@ CREATE TABLE IF NOT EXISTS ratings (
 
 CREATE INDEX IF NOT EXISTS ratings_rated_address_idx ON ratings(rated_address);
 CREATE INDEX IF NOT EXISTS ratings_job_id_idx        ON ratings(job_id);
+
+-- ─────────────────────────────────────────
+-- payment_records (on-chain payment mirror)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS payment_records (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tx_hash             TEXT        NOT NULL UNIQUE,
+  operation_id        TEXT        NOT NULL UNIQUE,
+  ledger              BIGINT      NOT NULL,
+  job_id              UUID        REFERENCES jobs(id),
+  from_address        TEXT        NOT NULL,
+  to_address          TEXT        NOT NULL,
+  amount              NUMERIC(20,7) NOT NULL,
+  asset               TEXT        NOT NULL DEFAULT 'XLM',
+  memo                TEXT,
+  direction           TEXT        NOT NULL DEFAULT 'outbound',
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS payment_records_job_id_idx ON payment_records(job_id);
+CREATE INDEX IF NOT EXISTS payment_records_ledger_idx ON payment_records(ledger DESC);
+
+-- ─────────────────────────────────────────
+-- donor_stats (simple on-chain donor leaderboard)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS donor_stats (
+  address             TEXT PRIMARY KEY,
+  total_donated_xlm   NUMERIC(20,7) NOT NULL DEFAULT 0,
+  donation_count      INTEGER       NOT NULL DEFAULT 0,
+  updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+
+-- ─────────────────────────────────────────
+-- indexer_state (single-row sync cursor)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS indexer_state (
+  id                     INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  synced                 BOOLEAN      NOT NULL DEFAULT FALSE,
+  last_processed_ledger  BIGINT,
+  last_transaction_at    TIMESTAMPTZ,
+  updated_at             TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO indexer_state (id, synced)
+VALUES (1, FALSE)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────
+-- scope_sessions (real-time scope collaboration history)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS scope_sessions (
+  session_id          TEXT PRIMARY KEY,
+  content             TEXT        NOT NULL DEFAULT '',
+  cursors             JSONB       NOT NULL DEFAULT '{}'::jsonb,
+  finalized           BOOLEAN     NOT NULL DEFAULT FALSE,
+  finalized_payload   JSONB,
+  expires_at          TIMESTAMPTZ NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS scope_sessions_expires_at_idx ON scope_sessions(expires_at);

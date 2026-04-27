@@ -18,11 +18,18 @@ import { formatXLM, timeAgo, formatDate, shortenAddress, statusLabel, statusClas
 import {
   accountUrl,
   buildReleaseEscrowTransaction,
+  buildReleaseWithConversionTransaction,
   explorerUrl,
+  getPathPaymentPrice,
   submitSignedSorobanTransaction,
+  USDC_ISSUER,
+  USDC_SAC_ADDRESS,
+  XLM_SAC_ADDRESS,
 } from "@/lib/stellar";
+import { Asset } from "@stellar/stellar-sdk";
 import { signTransactionWithWallet } from "@/lib/wallet";
 import type { Application, AvailabilityStatus, Job, UserProfile } from "@/utils/types";
+import clsx from "clsx";
 
 interface JobDetailProps {
   publicKey: string | null;
@@ -69,6 +76,37 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
   const isClient = publicKey && job?.clientAddress === publicKey;
   const isFreelancer = publicKey && job?.freelancerAddress === publicKey;
   const hasApplied = applications.some((application) => application.freelancerAddress === publicKey);
+
+  useEffect(() => {
+    if (job?.currency) setReleaseCurrency(job.currency as any);
+  }, [job?.currency]);
+
+  useEffect(() => {
+    if (!job || !releaseCurrency || releaseCurrency === job.currency) {
+      setEstimatedOutput(null);
+      return;
+    }
+
+    let cancelled = false;
+    const fetchPrice = async () => {
+      setFetchingPrice(true);
+      try {
+        const sourceAsset = job.currency === "XLM" ? Asset.native() : new Asset("USDC", USDC_ISSUER);
+        const destAsset = releaseCurrency === "XLM" ? Asset.native() : new Asset("USDC", USDC_ISSUER);
+        const res = await getPathPaymentPrice(sourceAsset, job.budget, destAsset);
+        if (!cancelled && res) {
+          setEstimatedOutput(res.amount);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (!cancelled) setFetchingPrice(false);
+      }
+    };
+
+    fetchPrice();
+    return () => { cancelled = true; };
+  }, [releaseCurrency, job?.budget, job?.currency]);
 
   useEffect(() => {
     if (!id) return;
@@ -158,6 +196,23 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
 
   const selectedApps = applications.filter((app) => selectedApplications.has(app.id));
 
+  const handleScoreProposals = async () => {
+    if (!id) return;
+    setScoringProposals(true);
+    try {
+      const scores = await scoreProposals(id as string);
+      const scoreMap = scores.reduce((accumulator, current) => {
+        accumulator[current.id] = { score: current.score, reasoning: current.reasoning };
+        return accumulator;
+      }, {} as Record<string, { score: number; reasoning: string }>);
+      setAiScores(scoreMap);
+    } catch (error) {
+      console.error("Scoring error:", error);
+    } finally {
+      setScoringProposals(false);
+    }
+  };
+
   const handleReleaseEscrow = async () => {
     if (!publicKey || !job) return;
     if (!job.escrowContractId) {
@@ -173,7 +228,24 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
     setReleaseSyncedWithBackend(false);
 
     try {
-      const prepared = await buildReleaseEscrowTransaction(job.escrowContractId, job.id, publicKey);
+      let prepared;
+      if (releaseCurrency !== job.currency && estimatedOutput) {
+        // Issue #104: Release with conversion
+        const targetTokenAddress = releaseCurrency === "XLM" ? XLM_SAC_ADDRESS : USDC_SAC_ADDRESS;
+        // Apply 1% slippage protection (destMin = estimatedOutput * 0.99)
+        const minAmountOut = BigInt(Math.round(parseFloat(estimatedOutput) * 0.99 * (releaseCurrency === "XLM" ? 10_000_000 : 1_000_000)));
+        
+        prepared = await buildReleaseWithConversionTransaction(
+          job.escrowContractId,
+          job.id,
+          publicKey,
+          targetTokenAddress,
+          minAmountOut
+        );
+      } else {
+        prepared = await buildReleaseEscrowTransaction(job.escrowContractId, job.id, publicKey);
+      }
+
       const { signedXDR, error: signError } = await signTransactionWithWallet(prepared.toXDR());
       if (signError || !signedXDR) {
         setActionError(signError || "Signing was cancelled.");
