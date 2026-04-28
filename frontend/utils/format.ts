@@ -168,6 +168,14 @@ export const CATEGORY_ICONS: Record<string, string> = {
   "Other": "📦",
 };
 
+export function categoryToSlug(category: string): string {
+  return category.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+export function slugToCategory(slug: string): string | undefined {
+  return JOB_CATEGORIES.find(cat => categoryToSlug(cat) === slug);
+}
+
 /**
  * Common Web3 and development skill suggestions for autocomplete.
  */
