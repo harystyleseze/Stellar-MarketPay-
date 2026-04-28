@@ -130,6 +130,20 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
       .finally(() => setLoading(false));
   }, [id, router, router.isReady]);
 
+
+  useEffect(() => {
+    const handleApplyShortcut = () => {
+      if (job?.status !== "open") return;
+      if (!publicKey) return;
+      if (isClient) return;
+      if (hasApplied) return;
+      setShowApplyForm(true);
+    };
+
+    window.addEventListener("shortcut-apply-job", handleApplyShortcut);
+    return () => window.removeEventListener("shortcut-apply-job", handleApplyShortcut);
+  }, [job?.status, publicKey, isClient, hasApplied]);
+
   useEffect(() => {
     if (!isClient || applications.length === 0) {
       setApplicantProfiles({});
