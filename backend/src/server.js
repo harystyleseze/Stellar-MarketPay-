@@ -21,6 +21,7 @@ const healthRoutes      = require("./routes/health");
 const authRoutes        = require("./routes/auth");
 const ratingRoutes      = require("./routes/ratings");
 const progressRoutes    = require("./routes/progress");
+const eventRoutes       = require("./routes/events");
 const migrate           = require("./db/migrate");
 const IndexerService    = require("./services/indexerService");
 const pool              = require("./db/pool");
@@ -114,6 +115,7 @@ app.use("/api/profiles",      profileRoutes);
 app.use("/api/escrow",        escrowRoutes);
 app.use("/api/ratings",       ratingRoutes);
 app.use("/api/progress",      progressRoutes);
+app.use("/api/events",        eventRoutes);
 app.get("/api/indexer/health", (req, res) => {
   res.json({
     status: "ok",
