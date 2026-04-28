@@ -15,21 +15,31 @@ import {
   deleteProposalTemplate,
   fetchPriceAlertPreference,
   upsertPriceAlertPreference,
+  fetchJobAnalytics,
+  extendJobExpiry,
 } from "@/lib/api";
 import { getXLMBalance, getUSDCBalance, streamAccountTransactions } from "@/lib/stellar";
 import { formatXLM, shortenAddress, timeAgo, statusLabel, statusClass, copyToClipboard, exportJobsToCSV, exportApplicationsToCSV } from "@/utils/format";
 import type { Job, Application } from "@/utils/types";
 import EditProfileForm from "@/components/EditProfileForm";
 import SendPaymentForm from "@/components/SendPaymentForm";
+import BuyXLMModal from "@/components/BuyXLMModal";
+import WithdrawToBankModal, {
+  loadWithdrawHistory,
+  type WithdrawHistoryEntry,
+} from "@/components/WithdrawToBankModal";
 import { useToast } from "@/components/Toast";
 import clsx from "clsx";
+import JobAnalytics from "@/components/JobAnalytics";
+
+const LOW_BALANCE_THRESHOLD_XLM = 5;
 
 interface DashboardProps {
   publicKey: string | null;
   onConnect: (pk: string) => void;
 }
 
-type Tab = "posted" | "applied" | "send" | "edit_profile" | "templates" | "price_alerts";
+type Tab = "posted" | "applied" | "send" | "edit_profile" | "templates" | "price_alerts" | "withdrawals";
 const REPOST_JOB_PREFILL_STORAGE_KEY = "marketpay_repost_job_prefill";
 
 export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
@@ -37,24 +47,11 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
   const [tab, setTab] = useState<Tab>("posted");
   const [myJobs, setMyJobs] = useState<Job[]>([]);
   const [myApplications, setMyApplications] = useState<Application[]>([]);
-  const [balance, setBalance]           = useState<string | null>(null);
-  const [usdcBalance, setUsdcBalance]   = useState<string | null>(null);
+  const [balance, setBalance] = useState<string | null>(null);
+  const [usdcBalance, setUsdcBalance] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
-
-  const handleCopy = async () => {
-    if (!publicKey) return;
-    const success = await copyToClipboard(publicKey);
-    if (success) {
-      setCopied(true);
-      setCopyError(false);
-      setTimeout(() => setCopied(false), 2000);
-    } else {
-      setCopyError(true);
-      setTimeout(() => setCopyError(false), 2000);
-    }
-  };
 
   const [processedTxs, setProcessedTxs] = useState<Set<string>>(new Set());
   const [templates, setTemplates] = useState<{ id: string; name: string; content: string }[]>([]);
@@ -65,8 +62,35 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
   const [maxPrice, setMaxPrice] = useState("");
   const [emailEnabled, setEmailEnabled] = useState(false);
   const [alertEmail, setAlertEmail] = useState("");
+  const [showBuyXLM, setShowBuyXLM] = useState(false);
+  const [showWithdraw, setShowWithdraw] = useState(false);
+  const [withdrawHistory, setWithdrawHistory] = useState<WithdrawHistoryEntry[]>([]);
   const { info, success } = useToast();
+
   const isRepostable = (status: Job["status"]) => status === "expired" || status === "cancelled";
+
+  const handleCopy = async () => {
+    if (!publicKey) return;
+    const ok = await copyToClipboard(publicKey);
+    if (ok) {
+      setCopied(true);
+      setCopyError(false);
+      setTimeout(() => setCopied(false), 2000);
+    } else {
+      setCopyError(true);
+      setTimeout(() => setCopyError(false), 2000);
+    }
+  };
+
+  const handleHireAgain = (job: Job) => {
+    router.push({
+      pathname: "/post-job",
+      query: {
+        category: job.category,
+        freelancer: job.freelancerAddress || "",
+      },
+    });
+  };
 
   const handleRepost = (job: Job) => {
     if (typeof window === "undefined") return;
@@ -77,19 +101,39 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
         description: job.description,
         budget: job.budget,
         category: job.category,
-        skills: job.skills,
-        currency: job.currency,
-        timezone: job.timezone || "",
-        screeningQuestions: job.screeningQuestions || [],
+        freelancer: job.freelancerAddress || "",
       })
     );
-    router.push("/post-job?mode=repost");
+    router.push("/post-job");
+  };
+
+  const refreshBalances = () => {
+    if (!publicKey) return;
+    Promise.all([getXLMBalance(publicKey), getUSDCBalance(publicKey)])
+      .then(([bal, usdc]) => {
+        setBalance(bal);
+        setUsdcBalance(usdc);
+      })
+      .catch(() => {});
+  };
+
+  const handleExtendJob = async (jobId: string) => {
+    setExtendingJob(jobId);
+    try {
+      await extendJobExpiry(jobId);
+      // Refresh jobs to update expiry info
+      const jobs = await fetchMyJobs(publicKey!);
+      setMyJobs(jobs);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setExtendingJob(null);
+    }
   };
 
   useEffect(() => {
     if (!publicKey) return;
-    
-    // Initial fetch
+
     Promise.all([
       fetchMyJobs(publicKey),
       fetchMyApplications(publicKey),
@@ -105,32 +149,26 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
       .catch(console.error)
       .finally(() => setLoading(false));
 
-    // Real-time stream
     const onTransaction = (tx: any) => {
       if (processedTxs.has(tx.hash)) return;
       setProcessedTxs((prev) => new Set(prev).add(tx.hash));
 
-      // Try to find a matching job in our current lists
-      // We assume the memo contains the job ID (common pattern in this app's context)
       const jobId = tx.memo;
       if (!jobId) return;
 
-      const job = myJobs.find(j => j.id === jobId);
+      const job = myJobs.find((j) => j.id === jobId);
       if (job) {
         success(`New application received for: ${job.title}`);
         window.dispatchEvent(new CustomEvent("stellar-activity", { detail: { type: "job", id: jobId } }));
-        // Refresh jobs to update applicant count
         fetchMyJobs(publicKey).then(setMyJobs);
         return;
       }
 
-      const app = myApplications.find(a => a.jobId === jobId);
+      const app = myApplications.find((a) => a.jobId === jobId);
       if (app) {
         info(`Application status updated for: ${jobId.slice(0, 8)}...`);
         window.dispatchEvent(new CustomEvent("stellar-activity", { detail: { type: "app", id: jobId } }));
-        // Refresh applications to update status
         fetchMyApplications(publicKey).then(setMyApplications);
-        return;
       }
     };
 
@@ -138,7 +176,7 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
     return () => {
       closeStream();
     };
-  }, [publicKey, myJobs, myApplications, processedTxs]);
+  }, [publicKey, myJobs, myApplications, processedTxs, info, success]);
 
   useEffect(() => {
     if (!publicKey) return;
@@ -160,6 +198,10 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
 
     return () => ws.close();
   }, [publicKey, info, success]);
+
+  useEffect(() => {
+    setWithdrawHistory(loadWithdrawHistory());
+  }, [showWithdraw]);
 
   useEffect(() => {
     if (!publicKey) return;
@@ -187,8 +229,6 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10 animate-fade-in">
-
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div>
           <h1 className="font-display text-3xl font-bold text-amber-100 mb-1">Dashboard</h1>
@@ -199,9 +239,11 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
               onClick={handleCopy}
               className={clsx(
                 "p-1.5 rounded-md transition-all flex items-center justify-center h-7 min-w-[28px]",
-                copied ? "text-emerald-400 bg-emerald-400/10 border border-emerald-400/20" : 
-                copyError ? "text-red-400 bg-red-400/10 border border-red-400/20" : 
-                "text-amber-600 hover:text-amber-300 hover:bg-amber-400/10 border border-transparent"
+                copied
+                  ? "text-emerald-400 bg-emerald-400/10 border border-emerald-400/20"
+                  : copyError
+                  ? "text-red-400 bg-red-400/10 border border-red-400/20"
+                  : "text-amber-600 hover:text-amber-300 hover:bg-amber-400/10 border border-transparent"
               )}
               title="Copy public key"
             >
@@ -221,7 +263,6 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
         <Link href="/post-job" className="btn-primary text-sm py-2.5 px-5 flex-shrink-0">+ Post a Job</Link>
       </div>
 
-      {/* Wallet card */}
       <div className="card mb-4 bg-gradient-to-br from-ink-800 to-ink-900 border-market-500/18 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-40 h-40 bg-market-500/4 rounded-full blur-2xl pointer-events-none" />
         <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-6">
@@ -235,11 +276,38 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
             ) : (
               <div className="h-10 w-48 bg-market-500/8 rounded-xl animate-pulse" />
             )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {balance !== null && parseFloat(balance) < LOW_BALANCE_THRESHOLD_XLM && (
+                <button
+                  onClick={() => setShowBuyXLM(true)}
+                  className="btn-primary text-xs py-1.5 px-3"
+                  data-testid="buy-xlm-button"
+                >
+                  Buy XLM
+                </button>
+              )}
+              {balance !== null && parseFloat(balance) >= LOW_BALANCE_THRESHOLD_XLM && (
+                <button
+                  onClick={() => setShowBuyXLM(true)}
+                  className="btn-secondary text-xs py-1.5 px-3"
+                  data-testid="buy-xlm-button"
+                >
+                  Buy XLM
+                </button>
+              )}
+              <button
+                onClick={() => setShowWithdraw(true)}
+                className="btn-secondary text-xs py-1.5 px-3"
+                data-testid="withdraw-to-bank-button"
+              >
+                Withdraw to Bank
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 text-center">
             {[
               { label: "Jobs Posted", value: myJobs.length },
-              { label: "Applied To",  value: myApplications.length },
+              { label: "Applied To", value: myApplications.length },
               { label: "Active Jobs", value: myJobs.filter((j) => j.status === "in_progress").length },
             ].map((stat) => (
               <div key={stat.label} className="bg-ink-900/50 rounded-xl p-3 border border-market-500/10">
@@ -249,15 +317,8 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
             ))}
           </div>
         </div>
-        {process.env.NEXT_PUBLIC_STELLAR_NETWORK !== "mainnet" && (
-          <div className="mt-4 pt-4 border-t border-market-500/8 flex items-center gap-2 text-xs text-amber-600/70">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
-            On <strong>Testnet</strong> — funds are not real. <a href="https://friendbot.stellar.org" target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-400">Get test XLM →</a>
-          </div>
-        )}
       </div>
 
-      {/* USDC balance card */}
       {usdcBalance !== null && (
         <div className="card mb-8 bg-gradient-to-br from-ink-800 to-ink-900 border-blue-500/18 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/4 rounded-full blur-2xl pointer-events-none" />
@@ -271,28 +332,27 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
         </div>
       )}
 
-      {/* Tabs */}
       <div className="flex border-b border-market-500/10 mb-6 overflow-x-auto">
-        {(["posted", "applied", "send", "edit_profile", "templates", "price_alerts"] as Tab[]).map((t) => (
+        {(["posted", "applied", "send", "edit_profile", "templates", "price_alerts", "withdrawals"] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)}
             className={clsx(
               "px-6 py-3 text-sm font-medium transition-all border-b-2 -mb-px whitespace-nowrap",
               tab === t ? "border-market-400 text-market-300" : "border-transparent text-amber-700 hover:text-amber-400"
             )}>
-            {t === "posted"      ? `Jobs Posted (${myJobs.length})` :
-             t === "applied"     ? `Applications (${myApplications.length})` :
-             t === "send"        ? "Send Payment" :
-             t === "templates"   ? "Proposal Templates" :
-             t === "price_alerts"? "Price Alerts" :
+            {t === "posted"       ? `Jobs Posted (${myJobs.length})` :
+             t === "applied"      ? `Applications (${myApplications.length})` :
+             t === "send"         ? "Send Payment" :
+             t === "templates"    ? "Proposal Templates" :
+             t === "price_alerts" ? "Price Alerts" :
+             t === "withdrawals"  ? `Withdrawals (${withdrawHistory.length})` :
              "Edit Profile"}
           </button>
         ))}
       </div>
 
-      {/* Tab content */}
       {loading ? (
         <div className="space-y-3">
-          {[1,2,3].map(i => <div key={i} className="card animate-pulse h-20" />)}
+          {[1, 2, 3].map((i) => <div key={i} className="card animate-pulse h-20" />)}
         </div>
       ) : tab === "posted" ? (
         myJobs.length === 0 ? (
@@ -304,14 +364,14 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
         ) : (
           <div className="space-y-3">
             <div className="flex justify-end mb-2">
-              <button 
-                onClick={() => exportJobsToCSV(myJobs)} 
+              <button
+                onClick={() => exportJobsToCSV(myJobs)}
                 className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-2"
               >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                 Download CSV
               </button>
             </div>
+
             {myJobs.map((job) => (
               <div key={job.id} className="card-hover flex items-center justify-between gap-4">
                   <Link href={`/jobs/${job.id}`} className="flex-1 min-w-0 block">
@@ -348,14 +408,14 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
         ) : (
           <div className="space-y-3">
             <div className="flex justify-end mb-2">
-              <button 
-                onClick={() => exportApplicationsToCSV(myApplications)} 
+              <button
+                onClick={() => exportApplicationsToCSV(myApplications)}
                 className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-2"
               >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                 Download CSV
               </button>
             </div>
+
             {myApplications.map((app) => (
               <Link key={app.id} href={`/jobs/${app.jobId}`}>
                 <div className="card-hover flex items-center justify-between gap-4">
@@ -375,14 +435,46 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
                   </div>
                 </div>
               </Link>
-            ))}
+             ))}
           </div>
         )
-      ) : tab === "send" ? (
-        <div className="max-w-lg">
-          <SendPaymentForm fromPublicKey={publicKey} />
+      ) : tab === "analytics" ? (
+        <div className="space-y-4">
+          {myJobs.length === 0 ? (
+            <div className="card text-center py-16">
+              <p className="font-display text-xl text-amber-100 mb-2">No jobs posted yet</p>
+              <p className="text-amber-800 text-sm mb-6">Post a job to see analytics</p>
+              <Link href="/post-job" className="btn-primary text-sm">Post a Job →</Link>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div className="flex gap-4 overflow-x-auto pb-2">
+                {myJobs.map((job) => (
+                  <button
+                    key={job.id}
+                    onClick={() => setSelectedJob(selectedJob?.id === job.id ? null : job)}
+                    className={clsx(
+                      "btn-secondary px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all",
+                      selectedJob?.id === job.id
+                        ? "bg-market-500/20 text-market-300 border-market-400"
+                        : "bg-ink-900/50 text-amber-700 hover:text-amber-300 border-transparent"
+                    )}
+                  >
+                    {job.title}
+                  </button>
+                ))}
+              </div>
+              {selectedJob ? (
+                <JobAnalytics job={selectedJob} onExtend={() => handleExtendJob(selectedJob.id)} />
+              ) : (
+                <div className="card text-center py-12">
+                  <p className="text-amber-800">Select a job to view its analytics</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-      ) : tab === "templates" ? (
+      ) : tab === "send" ? (
         <div className="space-y-4">
           <div className="card space-y-3">
             <p className="text-sm text-amber-100 font-medium">
@@ -506,9 +598,65 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
             Save Alerts
           </button>
         </div>
+      ) : tab === "withdrawals" ? (
+        withdrawHistory.length === 0 ? (
+          <div className="card text-center py-16">
+            <p className="font-display text-xl text-amber-100 mb-2">No withdrawals yet</p>
+            <p className="text-amber-800 text-sm mb-6">
+              Convert your XLM or USDC to USD, EUR, or NGN — paid directly to your bank account.
+            </p>
+            <button
+              onClick={() => setShowWithdraw(true)}
+              className="btn-primary text-sm"
+              data-testid="empty-state-withdraw-button"
+            >
+              Withdraw to Bank →
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {withdrawHistory.map((entry) => (
+              <div key={entry.id} className="card flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs px-2.5 py-0.5 rounded-full border bg-market-500/10 text-market-400 border-market-500/20">
+                      {entry.flow}
+                    </span>
+                    <span className="text-xs text-amber-700">{entry.status}</span>
+                  </div>
+                  <p className="font-display font-semibold text-amber-100 truncate">
+                    {entry.amount} {entry.asset} → {entry.fiatCurrency}
+                  </p>
+                  <p className="text-xs text-amber-800 mt-1">
+                    {new Date(entry.startedAt).toLocaleString()}
+                    {entry.externalTxId && ` · Bank ref ${entry.externalTxId.slice(0, 12)}…`}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
       ) : tab === "edit_profile" ? (
         <EditProfileForm publicKey={publicKey} />
       ) : null}
+
+      {showBuyXLM && (
+        <BuyXLMModal
+          publicKey={publicKey}
+          onClose={() => setShowBuyXLM(false)}
+          onComplete={refreshBalances}
+        />
+      )}
+      {showWithdraw && (
+        <WithdrawToBankModal
+          publicKey={publicKey}
+          onClose={() => {
+            setShowWithdraw(false);
+            setWithdrawHistory(loadWithdrawHistory());
+            refreshBalances();
+          }}
+        />
+      )}
     </div>
   );
 }
