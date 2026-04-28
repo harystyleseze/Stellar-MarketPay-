@@ -3,11 +3,20 @@
  * Shared TypeScript types for Stellar MarketPay.
  */
 
-export type JobStatus = "open" | "in_progress" | "completed" | "cancelled" | "expired";
-export type UserRole  = "client" | "freelancer" | "both";
-export type Currency  = "XLM" | "USDC";
+export type JobStatus =
+  | "open"
+  | "in_progress"
+  | "completed"
+  | "cancelled"
+  | "expired";
+export type UserRole = "client" | "freelancer" | "both";
+export type Currency = "XLM" | "USDC";
 export type JobVisibility = "public" | "private" | "invite_only";
-export type FreelancerTier = "Newcomer" | "Rising Star" | "Expert" | "Top Talent";
+export type FreelancerTier =
+  | "Newcomer"
+  | "Rising Star"
+  | "Expert"
+  | "Top Talent";
 export type AvailabilityStatus = "available" | "busy" | "unavailable";
 export type PortfolioItemType = "github" | "live" | "stellar_tx";
 
@@ -52,8 +61,8 @@ export interface Job {
   id: string;
   title: string;
   description: string;
-  budget: string;        // Amount as string
-  currency: Currency;   // XLM or USDC
+  budget: string; // Amount as string
+  currency: Currency; // XLM or USDC
   category: string;
   visibility?: JobVisibility;
   skills: string[];
@@ -62,15 +71,15 @@ export interface Job {
   freelancerAddress?: string;
   escrowContractId?: string;
   applicantCount: number;
-  shareCount?: number;   // Track share clicks
-  boosted?: boolean;     // Featured/boosted status
+  shareCount?: number; // Track share clicks
+  boosted?: boolean; // Featured/boosted status
   boostedUntil?: string; // ISO date when boost expires
   createdAt: string;
   updatedAt: string;
   deadline?: string;
-  timezone?: string;     // IANA timezone string (e.g., "America/New_York")
-  screeningQuestions?: string[];  // Up to 5 screening questions
-  expiresAt?: string;    // ISO date when job expires if not hired
+  timezone?: string; // IANA timezone string (e.g., "America/New_York")
+  screeningQuestions?: string[]; // Up to 5 screening questions
+  expiresAt?: string; // ISO date when job expires if not hired
   extendedCount?: number; // Number of times expiry has been extended
   extendedUntil?: string; // Final expiry after all extensions
 }
@@ -81,10 +90,10 @@ export interface Application {
   freelancerAddress: string;
   freelancerTier?: FreelancerTier;
   proposal: string;
-  bidAmount: string;     // Amount as string
-  currency: Currency;    // XLM or USDC
+  bidAmount: string; // Amount as string
+  currency: Currency; // XLM or USDC
   status: "pending" | "accepted" | "rejected";
-  screeningAnswers?: Record<string, string>;  // Question -> Answer mapping
+  screeningAnswers?: Record<string, string>; // Question -> Answer mapping
   createdAt: string;
 }
 
@@ -113,7 +122,7 @@ export interface Rating {
   jobId: string;
   raterAddress: string;
   ratedAddress: string;
-  stars: number;          // 1–5
+  stars: number; // 1–5
   review?: string;
   createdAt: string;
 }
@@ -125,6 +134,12 @@ export interface ProposalTemplate {
   content: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SkillEndorsement {
+  skill: string;
+  count: number;
+  endorsers: string[];
 }
 
 export interface PriceAlertPreference {
