@@ -6,6 +6,8 @@
 "use strict";
 
 const pool = require("../db/pool");
+const { query } = pool; // Assuming it might be extracted like this or just use pool.query
+
 const { getTimezoneOffset } = require("date-fns-tz");
 
 /**
@@ -178,19 +180,7 @@ function rowToJob(row) {
  *   clientAddress: 'GBX...',
  * });
  */
-async function createJob({
-  title,
-  description,
-  budget,
-  currency = "XLM",
-  category,
-  visibility = "public",
-  skills,
-  deadline,
-  timezone,
-  screeningQuestions,
-  clientAddress,
-}) {
+async function createJob({ title, description, budget, currency, category, skills, deadline, timezone, clientAddress, screeningQuestions }) {
   validatePublicKey(clientAddress);
 
   if (!title || title.length < 10) {
@@ -232,22 +222,22 @@ async function createJob({
   const { rows } = await pool.query(
     `
     INSERT INTO jobs
-      (title, description, budget, currency, category, skills, status, client_address, deadline, timezone, screening_questions, visibility, created_at, updated_at, expires_at)
-    VALUES ($1, $2, $3, $4, $5, $6, 'open', $7, $8, $9, $10, $11, NOW(), NOW(), NOW() + INTERVAL '30 days')
+      (title, description, budget, currency, category, skills, status, client_address, deadline, timezone, screening_questions, created_at, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, 'open', $7, $8, $9, $10, NOW(), NOW())
     RETURNING *
     `,
     [
       title.trim(),
       description.trim(),
-      parseFloat(budget),
-      currency,
+      parseFloat(budget).toFixed(7),
+      currency || 'XLM',
       category,
       safeSkills,
       clientAddress,
       deadline || null,
       timezone || null,
       safeScreeningQuestions,
-      visibility,
+      currency || 'XLM'
     ]
   );
 
@@ -564,122 +554,26 @@ async function incrementShareCount(jobId) {
 }
 
 /**
- * Auto-expire jobs that have passed their expiry date and are still open (not hired).
- * Returns the count of expired jobs.
- *
- * @returns {Promise<number>}
+ * Track a referral click for a job.
  */
-async function expireOldJobs() {
-  const { rowCount } = await pool.query(
-    `UPDATE jobs
-     SET status = 'cancelled',
-         updated_at = NOW()
-     WHERE status = 'open'
-       AND freelancer_address IS NULL
-       AND expires_at < NOW()`,
+async function trackReferral(jobId, referrerAddress, ipAddress) {
+  validatePublicKey(referrerAddress);
+  
+  // Optional: Check if job exists
+  await getJob(jobId);
+
+  await pool.query(
+    "INSERT INTO referrals (job_id, referrer_address, ip_address) VALUES ($1, $2, $3)",
+    [jobId, referrerAddress, ipAddress || null]
   );
-  return rowCount;
+  
+  // Increment referral count on profile
+  await pool.query(
+    "UPDATE profiles SET referral_count = referral_count + 1 WHERE public_key = $1",
+    [referrerAddress]
+  );
 }
 
-/**
- * Get jobs that are expiring within N days (for warnings).
- *
- * @param {number} withinDays  Days threshold (e.g., 3)
- * @returns {Promise<Job[]>}
- */
-async function getExpiringJobs(withinDays = 3) {
-  const withinDate = new Date();
-  withinDate.setDate(withinDate.getDate() + withinDays);
-
-  const { rows } = await pool.query(
-    `SELECT * FROM jobs
-     WHERE status = 'open'
-       AND freelancer_address IS NULL
-       AND expires_at IS NOT NULL
-       AND expires_at <= $1
-     ORDER BY expires_at ASC`,
-    [withinDate.toISOString()]
-  );
-  return rows.map(rowToJob);
-}
-
-/**
- * Get analytics for a job (applications per day, avg bid, skill distribution, time to hire).
- *
- * @param {string} jobId  UUID of the job.
- * @returns {Promise<Object>} Analytics object.
- */
-async function getJobAnalytics(jobId) {
-  // Applications per day (time series)
-  const { rows: appsPerDayRows } = await pool.query(
-    `SELECT DATE(created_at) as day, COUNT(*) as count
-     FROM applications
-     WHERE job_id = $1
-     GROUP BY DATE(created_at)
-     ORDER BY day ASC`,
-    [jobId]
-  );
-
-  // Average bid amount and currency breakdown
-  const { rows: bidRows } = await pool.query(
-    `SELECT AVG(bid_amount::numeric) as avg_bid, currency, COUNT(*) as count
-     FROM applications
-     WHERE job_id = $1
-     GROUP BY currency`,
-    [jobId]
-  );
-
-  // Skill distribution - need to infer from freelancer profiles
-  const { rows: skillRows } = await pool.query(
-    `SELECT p.skills, COUNT(*) as count
-     FROM applications a
-     LEFT JOIN profiles p ON a.freelancer_address = p.public_key
-     WHERE a.job_id = $1
-     GROUP BY p.skills`,
-    [jobId]
-  );
-
-  // Time to hire - from job created_at to when a freelancer was assigned (status = 'in_progress')
-  const { rows: hireTimeRows } = await pool.query(
-    `SELECT EXTRACT(EPOCH FROM (MIN(updated_at) - j.created_at)) / 86400 as days_to_hire
-     FROM jobs j
-     WHERE j.id = $1 AND j.status IN ('in_progress', 'completed')`,
-    [jobId]
-  );
-
-  // Total applications and status breakdown
-  const { rows: statusRows } = await pool.query(
-    `SELECT status, COUNT(*) as count
-     FROM applications
-     WHERE job_id = $1
-     GROUP BY status`,
-    [jobId]
-  );
-
-  // Build aggregated skills count
-  const skillDistribution = {};
-  skillRows.forEach(row => {
-    const skills = row.skills || [];
-    skills.forEach(skill => {
-      skillDistribution[skill] = (skillDistribution[skill] || 0) + 1;
-    });
-  });
-
-  return {
-    applicationsPerDay: appsPerDayRows.map(r => ({ day: r.day, count: parseInt(r.count) || 0 })),
-    averageBidAmount: bidRows.map(r => ({
-      currency: r.currency,
-      avgBid: r.avg_bid ? parseFloat(r.avg_bid) : 0,
-      count: parseInt(r.count) || 0
-    })),
-    skillDistribution,
-    daysToHire: hireTimeRows[0] && hireTimeRows[0].days_to_hire ? parseFloat(hireTimeRows[0].days_to_hire) : null,
-    applicationStatusCounts: statusRows.reduce((acc, r) => {
-      acc[r.status] = parseInt(r.count) || 0;
-      return acc;
-    }, {})
-  };
-}
 
 module.exports = {
   createJob,
@@ -690,8 +584,5 @@ module.exports = {
   deleteJob,
   boostJob,
   incrementShareCount,
-  extendJobExpiry,
-  expireOldJobs,
-  getExpiringJobs,
-  getJobAnalytics,
+  trackReferral,
 };

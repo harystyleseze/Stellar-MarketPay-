@@ -10,7 +10,7 @@ const { createRateLimiter } = require("../middleware/rateLimiter");
 const { verifyJWT } = require("../middleware/auth");
 
 const jobService = require("../services/jobService");
-const { createJob, getJob, listJobs, listJobsByClient, updateJobEscrowId, deleteJob, boostJob, incrementShareCount } = jobService.default || jobService;
+const { createJob, getJob, listJobs, listJobsByClient, updateJobEscrowId, deleteJob, boostJob, incrementShareCount, trackReferral } = jobService.default || jobService;
 const { verifyJWT } = require("../middleware/auth");
 const { inviteFreelancerToJob } = require("../services/jobInvitationService");
 const { logContractInteraction } = require("../services/contractAuditService");
@@ -186,8 +186,19 @@ router.patch("/:id/extend", verifyJWT, generalJobRateLimiter, async (req, res, n
   } catch (e) { next(e); }
 });
 
-// GET /api/jobs/expiring — get jobs expiring within 3 days (for warnings)
-router.get("/expiring", verifyJWT, generalJobRateLimiter, async (req, res, next) => {
+// POST /api/jobs/:id/referral — track a referral click
+router.post("/:id/referral", generalJobRateLimiter, async (req, res, next) => {
+  try {
+    const { referrer } = req.body;
+    if (!referrer) return res.status(400).json({ success: false, error: "Referrer address is required" });
+    const ip = req.ip;
+    await trackReferral(req.params.id, referrer, ip);
+    res.json({ success: true });
+  } catch (e) { next(e); }
+});
+
+// DELETE /api/jobs/:id — roll back an orphaned job (escrow failed after creation)
+router.delete("/:id", verifyJWT, generalJobRateLimiter, async (req, res, next) => {
   try {
     const { getExpiringJobs } = require("../services/jobService");
     const jobs = await getExpiringJobs(3);

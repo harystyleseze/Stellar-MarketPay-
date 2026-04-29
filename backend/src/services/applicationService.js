@@ -69,50 +69,21 @@ function rowToApp(row) {
     id: row.id,
     jobId: row.job_id,
     freelancerAddress: row.freelancer_address,
-    freelancerTier: calculateFreelancerTier(completedJobs, freelancerRating),
-    proposal: row.proposal,
-    bidAmount: row.bid_amount,
-    currency: row.currency || 'XLM',
-    status: row.status,
-    screeningAnswers: row.screening_answers || {},
-    createdAt: row.created_at,
+    freelancerTier:    calculateFreelancerTier(completedJobs, freelancerRating),
+    proposal:          row.proposal,
+    bidAmount:         row.bid_amount,
+    currency:          row.currency || 'XLM',
+    status:            row.status,
+    screeningAnswers:  row.screening_answers || {},
+    createdAt:         row.created_at,
+    referredBy:        row.referred_by,
   };
 }
 
 // ─── service functions ───────────────────────────────────────────────────────
 
-// async function submitApplication({ jobId, freelancerAddress, proposal, bidAmount, currency = 'XLM' }) {
-/**
- * @typedef {Object} SubmitApplicationInput
- * @property {number|string} jobId - The ID of the job being applied for.
- * @property {string} freelancerAddress - The Stellar public key of the freelancer.
- * @property {string} proposal - The application proposal text (min 50 chars).
- * @property {string|number} bidAmount - The positive bid amount for the application.
- * @property {string} currency - The currency of the bid amount (default: 'XLM').
- * @property {Object} screeningAnswers - The screening answers for the job.
- */
+async function submitApplication({ jobId, freelancerAddress, proposal, bidAmount, screeningAnswers, referredBy }) {
 
-/**
- * Submit an application for a specific job.
- *
- * @param {SubmitApplicationInput} params - The parameters for submitting an application.
- * @returns {Promise<Object>} The created application object.
- * @throws {Error} If validation fails, job is not open, client is applying to own job, or if freelancer already applied.
- *
- * @example
- * const app = await applicationService.submitApplication({
- *   jobId: 10,
- *   freelancerAddress: 'GBX...',
- *   proposal: 'I have 5 years of experience building similar applications...',
- *   bidAmount: 200,
- *   currency: 'XLM',
- *   screeningAnswers: {
- *     question1: 'answer1',
- *     question2: 'answer2',
- *   },
- * });
- */
-async function submitApplication({ jobId, freelancerAddress, proposal, bidAmount, currency = 'XLM', screeningAnswers }) {
   validatePublicKey(freelancerAddress);
 
   const job = await getJob(jobId);
@@ -175,17 +146,10 @@ async function submitApplication({ jobId, freelancerAddress, proposal, bidAmount
   let appRow;
   try {
     const { rows } = await pool.query(
-      `INSERT INTO applications (job_id, freelancer_address, proposal, bid_amount, currency, screening_answers, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())
+      `INSERT INTO applications (job_id, freelancer_address, proposal, bid_amount, status, screening_answers, referred_by, created_at)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, NOW())
        RETURNING *`,
-      [
-        jobId,
-        freelancerAddress,
-        proposal.trim(),
-        parseFloat(bidAmount).toFixed(7),
-        currency,
-        JSON.stringify(safeScreeningAnswers),
-      ]
+      [jobId, freelancerAddress, proposal.trim(), parseFloat(bidAmount).toFixed(7), screeningAnswers || {}, referredBy || null]
     );
     appRow = rows[0];
   } catch (err) {

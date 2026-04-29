@@ -108,6 +108,7 @@ export interface Application {
   currency: Currency;    // XLM or USDC
   status: "pending" | "accepted" | "rejected";
   screeningAnswers?: Record<string, string>;  // Question -> Answer mapping
+  referredBy?: string;
   createdAt: string;
 }
 
@@ -136,8 +137,8 @@ export interface UserProfile {
   tier?: FreelancerTier;
   /** Number of ratings received (when returned by profile API). */
   ratingCount?: number;
-  didHash?: string;
-  isKycVerified?: boolean;
+  reputationPoints?: number;
+  referralCount?: number;
   createdAt: string;
   updatedAt?: string;
 }

@@ -12,8 +12,7 @@ import ApplicationForm from "@/components/ApplicationForm";
 import WalletConnect from "@/components/WalletConnect";
 import RatingForm from "@/components/RatingForm";
 import ProposalComparison from "@/components/ProposalComparison";
-import MessageThread from "@/components/MessageThread";
-import { fetchJob, fetchApplications, acceptApplication, releaseEscrow } from "@/lib/api";
+import { fetchJob, fetchApplications, acceptApplication, releaseEscrow, trackReferralClick, fetchProfile } from "@/lib/api";
 import { formatXLM, timeAgo, formatDate, shortenAddress, statusLabel, statusClass } from "@/utils/format";
 import {
   accountUrl,
@@ -74,22 +73,9 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
   } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [prefillData, setPrefillData] = useState<any>(null);
-
-  const [releaseCurrency, setReleaseCurrency] = useState<"XLM" | "USDC">("XLM");
-  const [estimatedOutput, setEstimatedOutput] = useState<string | null>(null);
-  const [fetchingPrice, setFetchingPrice] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
-  const [inviteAddress, setInviteAddress] = useState("");
-
-  const [showReportModal, setShowReportModal] = useState(false);
-  const [reportCategory, setReportCategory] = useState("");
-  const [reportDescription, setReportDescription] = useState("");
-  const [reportLoading, setReportLoading] = useState(false);
-  const [reportSuccess, setReportSuccess] = useState(false);
-  const [reportError, setReportError] = useState<string | null>(null);
-  const [isLiveSubscriptionActive, setIsLiveSubscriptionActive] = useState(false);
+  const [selectedApplications, setSelectedApplications] = useState<Set<string>>(new Set());
+  const [showComparison, setShowComparison] = useState(false);
+  const [prefillData, setPrefillData] = useState<{ bidAmount?: string; message?: string } | null>(null);
 
   const isClient = Boolean(publicKey && job?.clientAddress === publicKey);
   const isFreelancer = Boolean(publicKey && job?.freelancerAddress === publicKey);
@@ -151,7 +137,7 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
   useEffect(() => {
     if (!id) return;
 
-    const { prefill } = router.query;
+    const { prefill, ref } = router.query;
     if (typeof prefill === "string") {
       try {
         const decoded = JSON.parse(Buffer.from(prefill, "base64").toString("utf8"));
@@ -161,7 +147,10 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
       }
     }
 
-    setLoading(true);
+    if (typeof ref === "string") {
+      trackReferralClick(id as string, ref).catch(console.error);
+      localStorage.setItem(`referral_${id}`, ref);
+    }
 
     Promise.all([fetchJob(id as string), fetchApplications(id as string)])
       .then(([jobData, applicationData]) => {
@@ -275,12 +264,9 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
 
     try {
       await acceptApplication(applicationId, publicKey);
-      const [jobData, applicationData] = await Promise.all([
-        fetchJob(id as string),
-        fetchApplications(id as string),
-      ]);
-      setJob(jobData);
-      setApplications(applicationData);
+      const [j, apps] = await Promise.all([fetchJob(id as string), fetchApplications(id as string)]);
+      setJob(j); setApplications(apps);
+      setSelectedApplications(new Set());
     } catch {
       setActionError("Failed to accept application.");
     }
@@ -540,6 +526,26 @@ export default function JobDetail({ publicKey, onConnect }: JobDetailProps) {
               >
                 Client: {shortenAddress(job.clientAddress)} ↗
               </a>
+              
+              <div className="mt-4">
+                <button 
+                  onClick={() => {
+                    if (!publicKey) {
+                      setActionError("Please connect your wallet to refer others.");
+                      return;
+                    }
+                    const url = `${window.location.origin}/jobs/${job.id}?ref=${publicKey}`;
+                    navigator.clipboard.writeText(url);
+                    alert("Referral link copied to clipboard: " + url);
+                  }}
+                  className="inline-flex items-center gap-2 text-xs font-semibold text-market-400 hover:text-market-300 transition-colors bg-market-500/10 px-3 py-1.5 rounded-lg border border-market-500/20"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 100 2.684 3 3 0 000-2.684z" />
+                  </svg>
+                  Refer a Freelancer
+                </button>
+              </div>
             </div>
           </div>
 
