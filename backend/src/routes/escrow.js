@@ -16,7 +16,7 @@ const { logContractInteraction } = require("../services/contractAuditService");
 /**
  * POST /api/escrow/:jobId/release
  */
-router.post("/:jobId/release", escrowActionRateLimiter, async (req, res, next) => {
+router.post("/:jobId/release", async (req, res, next) => {
   try {
     const { jobId } = req.params;
     const { clientAddress, contractTxHash, releaseCurrency } = req.body;

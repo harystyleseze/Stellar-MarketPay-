@@ -233,8 +233,12 @@ export function availabilityStatusLabel(status?: AvailabilityStatus | null): str
 
 export function availabilitySummary(availability?: Availability | null): string {
   if (!availability) return "";
-  const parts: string[] = [];
-  if (availability.availableFrom) parts.push(`From ${availability.availableFrom}`);
-  if (availability.availableUntil) parts.push(`Until ${availability.availableUntil}`);
-  return parts.join(" · ");
+  const { availableFrom, availableUntil, status } = availability;
+  if (status === "unavailable") return "Not currently accepting new work.";
+  if (availableFrom && availableUntil) {
+    return `Available from ${formatDate(availableFrom)} to ${formatDate(availableUntil)}.`;
+  }
+  if (availableFrom) return `Available from ${formatDate(availableFrom)}.`;
+  if (availableUntil) return `Available until ${formatDate(availableUntil)}.`;
+  return "";
 }

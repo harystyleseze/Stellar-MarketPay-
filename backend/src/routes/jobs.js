@@ -68,25 +68,13 @@ router.get("/client/:publicKey", generalJobRateLimiter, async (req, res, next) =
 });
 
 // GET /api/jobs/:id — get single job
-router.get("/:id", generalJobRateLimiter, async (req, res, next) => {
-  try {
-    const job = await getJob(req.params.id);
-    const viewerAddress = req.query.viewerAddress;
-    const canView =
-      job.visibility === "public" ||
-      (typeof viewerAddress === "string" &&
-        (viewerAddress === job.clientAddress || viewerAddress === job.freelancerAddress));
-
-    if (job.visibility === "private" && !canView) {
-      return res.status(403).json({ success: false, error: "Job is private" });
-    }
-    res.json({ success: true, data: job });
-  }
+router.get("/:id", generalJobRateLimiter , async (req, res, next) => {
+  try { res.json({ success: true, data: await getJob(req.params.id) }); }
   catch (e) { next(e); }
 });
 
 // POST /api/jobs — create a new job
-router.post("/", jobCreationRateLimiter, async (req, res, next) => {
+router.post("/", jobCreationRateLimiter , async (req, res, next) => {
   try {
     const job = await createJob(req.body);
     res.status(201).json({ success: true, data: job });
