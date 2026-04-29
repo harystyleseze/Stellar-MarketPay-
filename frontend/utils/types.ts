@@ -20,31 +20,6 @@ export type FreelancerTier =
 export type AvailabilityStatus = "available" | "busy" | "unavailable";
 export type PortfolioItemType = "github" | "live" | "stellar_tx";
 
-export interface ApplicationStatusCounts {
-  pending?: number;
-  accepted?: number;
-  rejected?: number;
-}
-
-export interface ApplicationPerDay {
-  day: string;
-  count: number;
-}
-
-export interface AverageBid {
-  currency: Currency;
-  avgBid: number;
-  count: number;
-}
-
-export interface JobAnalytics {
-  applicationsPerDay: ApplicationPerDay[];
-  averageBidAmount: AverageBid[];
-  skillDistribution: Record<string, number>;
-  daysToHire: number | null;
-  applicationStatusCounts: ApplicationStatusCounts;
-}
-
 export interface PortfolioItem {
   title: string;
   url: string;
@@ -55,6 +30,24 @@ export interface Availability {
   status: AvailabilityStatus;
   availableFrom?: string;
   availableUntil?: string;
+}
+
+export type FreelancerTier = "Newcomer" | "Rising Star" | "Expert" | "Top Talent";
+
+export type AvailabilityStatus = "available" | "busy" | "unavailable";
+
+export interface Availability {
+  status: AvailabilityStatus;
+  availableFrom?: string;   // ISO date string
+  availableUntil?: string;  // ISO date string
+}
+
+export type PortfolioItemType = "github" | "live" | "stellar_tx";
+
+export interface PortfolioItem {
+  title: string;
+  url: string;
+  type: PortfolioItemType;
 }
 
 export interface Job {
@@ -97,12 +90,23 @@ export interface Application {
   createdAt: string;
 }
 
+export interface ProfileStats {
+  totalApplications: number;
+  acceptedApplications: number;
+  successRate: number;
+}
+
+export interface ResponseTimeStats {
+  averageDays: number | null;
+}
+
 export interface UserProfile {
   publicKey: string;
   displayName?: string;
   bio?: string;
   skills?: string[];
   portfolioItems?: PortfolioItem[];
+  portfolioFiles?: PortfolioFile[];
   availability?: Availability | null;
   role: UserRole;
   completedJobs: number;
@@ -111,8 +115,8 @@ export interface UserProfile {
   tier?: FreelancerTier;
   /** Number of ratings received (when returned by profile API). */
   ratingCount?: number;
-  didHash?: string;
-  isKycVerified?: boolean;
+  reputationPoints?: number;
+  referralCount?: number;
   createdAt: string;
   updatedAt?: string;
 }
@@ -127,13 +131,10 @@ export interface Rating {
   createdAt: string;
 }
 
-export interface ProposalTemplate {
-  id: string;
-  freelancerAddress: string;
-  name: string;
-  content: string;
-  createdAt: string;
-  updatedAt: string;
+export interface AssessmentQuestion {
+  id: number;
+  question: string;
+  options: string[];
 }
 
 export interface SkillEndorsement {
@@ -160,4 +161,14 @@ export interface EscrowState {
   amount: string;
   status: "locked" | "released" | "refunded" | "disputed";
   createdLedger: number;
+}
+
+export interface Message {
+  id: string;
+  jobId: string;
+  senderAddress: string;
+  receiverAddress: string;
+  content: string;
+  read: boolean;
+  createdAt: string;
 }
