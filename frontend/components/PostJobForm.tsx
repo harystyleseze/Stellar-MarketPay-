@@ -394,6 +394,19 @@ export default function PostJobForm() {
           </p>
         </div>
 
+        <div>
+          <label className="label">Visibility</label>
+          <select
+            value={form.visibility}
+            onChange={(e) => set("visibility", e.target.value as "public" | "private" | "invite_only")}
+            className="input-field appearance-none cursor-pointer"
+          >
+            <option value="public">Public</option>
+            <option value="private">Private (only you)</option>
+            <option value="invite_only">Invite Only</option>
+          </select>
+        </div>
+
         {/* Skills */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
