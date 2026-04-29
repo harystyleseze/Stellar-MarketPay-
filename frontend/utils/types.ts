@@ -37,49 +37,6 @@ export interface TokenInfo {
   verified?: boolean;
 }
 
-export interface TokenBalance {
-  balance: string;
-  exists: boolean;
-  limit: string;
-}
-
-export interface ApplicationStatusCounts {
-  pending?: number;
-  accepted?: number;
-  rejected?: number;
-}
-
-export interface ApplicationPerDay {
-  day: string;
-  count: number;
-}
-
-export interface AverageBid {
-  currency: Currency;
-  avgBid: number;
-  count: number;
-}
-
-export interface JobAnalytics {
-  applicationsPerDay: ApplicationPerDay[];
-  averageBidAmount: AverageBid[];
-  skillDistribution: Record<string, number>;
-  daysToHire: number | null;
-  applicationStatusCounts: ApplicationStatusCounts;
-}
-
-export interface PortfolioItem {
-  title: string;
-  url: string;
-  type: PortfolioItemType;
-}
-
-export interface Availability {
-  status: AvailabilityStatus;
-  availableFrom?: string;
-  availableUntil?: string;
-}
-
 export interface Job {
   id: string;
   title: string;
