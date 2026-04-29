@@ -3,29 +3,64 @@
  * Freelancer applies to a job with a proposal and bid amount.
  */
 import { useState, useEffect } from "react";
-import { submitApplication } from "@/lib/api";
+import { submitApplication, fetchProposalTemplates } from "@/lib/api";
 import type { Job } from "@/utils/types";
 import { formatXLM } from "@/utils/format";
 import { useToast } from "./Toast";
+import clsx from "clsx";
 
 interface ApplicationFormProps {
   job: Job;
   publicKey: string;
+  prefillData?: {
+    bidAmount?: string;
+    message?: string;
+  };
   onSuccess: () => void;
 }
 
-export default function ApplicationForm({ job, publicKey, onSuccess }: ApplicationFormProps) {
-  const [proposal, setProposal] = useState("");
+export default function ApplicationForm({ job, publicKey, prefillData, onSuccess }: ApplicationFormProps) {
+  const [proposal, setProposal] = useState(prefillData?.message || "");
   const toast = useToast();
-  const [bidAmount, setBidAmount] = useState(job.budget);
+  const [bidAmount, setBidAmount] = useState(prefillData?.bidAmount || job.budget);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [screeningAnswers, setScreeningAnswers] = useState<Record<string, string>>({});
+  const [templates, setTemplates] = useState<{ id: string; name: string; content: string }[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
 
-  const isValid = proposal.trim().length >= 50 && parseFloat(bidAmount) > 0;
+  // Issue #152 — enforce 50-word minimum on the proposal.
+  const wordCount = proposal.trim() === "" ? 0 : proposal.trim().split(/\s+/).length;
+  const MIN_WORDS = 50;
+  const wordsRemaining = Math.max(0, MIN_WORDS - wordCount);
+  const meetsWordMinimum = wordCount >= MIN_WORDS;
+
+  const isValid = meetsWordMinimum && parseFloat(bidAmount) > 0;
+
+  // Initialize screening answers when job changes
+  useEffect(() => {
+    if (job.screeningQuestions && job.screeningQuestions.length > 0) {
+      const initialAnswers: Record<string, string> = {};
+      job.screeningQuestions.forEach(q => {
+        initialAnswers[q] = "";
+      });
+      setScreeningAnswers(initialAnswers);
+    }
+  }, [job.screeningQuestions]);
+
+  useEffect(() => {
+    fetchProposalTemplates().then(setTemplates).catch(() => {});
+  }, []);
+
+  const allScreeningQuestionsAnswered = job.screeningQuestions && job.screeningQuestions.length > 0
+    ? job.screeningQuestions.every(q => screeningAnswers[q] && screeningAnswers[q].trim().length > 0)
+    : true;
+
+  const isFormValid = isValid && allScreeningQuestionsAnswered;
 
   const handleSubmit = () => {
-    if (!isValid) return;
+    if (!isFormValid) return;
     setShowConfirm(true);
   };
 
@@ -34,11 +69,14 @@ export default function ApplicationForm({ job, publicKey, onSuccess }: Applicati
     setLoading(true);
     setError(null);
     try {
+      const referredBy = typeof window !== "undefined" ? localStorage.getItem(`referral_${job.id}`) : null;
       await submitApplication({
         jobId: job.id,
         freelancerAddress: publicKey,
         proposal: proposal.trim(),
         bidAmount: parseFloat(bidAmount).toFixed(7),
+        screeningAnswers: job.screeningQuestions && job.screeningQuestions.length > 0 ? screeningAnswers : undefined,
+        referredBy: referredBy || undefined,
       });
       toast.success("Proposal submitted successfully!");
       onSuccess();
@@ -57,6 +95,27 @@ export default function ApplicationForm({ job, publicKey, onSuccess }: Applicati
         </p>
 
         <div className="space-y-5">
+          <div>
+            <label className="label">Use Template</label>
+            <select
+              value={selectedTemplateId}
+              onChange={(e) => {
+                const templateId = e.target.value;
+                setSelectedTemplateId(templateId);
+                const template = templates.find((item) => item.id === templateId);
+                if (template) setProposal(template.content);
+              }}
+              className="input-field appearance-none cursor-pointer"
+            >
+              <option value="">Select a template...</option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Cover letter */}
           <div>
             <label className="label">Cover Letter</label>
@@ -64,9 +123,27 @@ export default function ApplicationForm({ job, publicKey, onSuccess }: Applicati
               value={proposal} onChange={(e) => setProposal(e.target.value)}
               rows={6}
               placeholder="Describe your relevant experience, your approach to this project, and why you're the best fit..."
-              className="textarea-field"
+              className={clsx(
+                "textarea-field",
+                proposal.length > 0 && !meetsWordMinimum && "border-red-500/40"
+              )}
+              aria-invalid={proposal.length > 0 && !meetsWordMinimum}
+              aria-describedby="proposal-word-count"
             />
-            <p className="mt-1 text-xs text-amber-800/50">{proposal.length} chars (min 50)</p>
+            <p
+              id="proposal-word-count"
+              className={clsx(
+                "mt-1 text-xs font-medium",
+                meetsWordMinimum ? "text-green-400" : "text-red-400"
+              )}
+            >
+              {wordCount} {wordCount === 1 ? "word" : "words"} (minimum {MIN_WORDS})
+              {!meetsWordMinimum && (
+                <span className="ml-1 text-amber-800/80 font-normal">
+                  — {wordsRemaining} more {wordsRemaining === 1 ? "word" : "words"} needed
+                </span>
+              )}
+            </p>
           </div>
 
           {/* Bid amount */}
@@ -82,11 +159,38 @@ export default function ApplicationForm({ job, publicKey, onSuccess }: Applicati
             </p>
           </div>
 
+          {/* Screening Questions */}
+          {job.screeningQuestions && job.screeningQuestions.length > 0 && (
+            <div>
+              <label className="label">Screening Questions <span className="text-red-400">*</span></label>
+              <p className="text-xs text-amber-800/50 mb-3">Please answer all questions to submit your application.</p>
+              <div className="space-y-4">
+                {job.screeningQuestions.map((question, index) => (
+                  <div key={index}>
+                    <label className="text-sm text-amber-200 mb-1.5 block">
+                      {index + 1}. {question}
+                    </label>
+                    <textarea
+                      value={screeningAnswers[question] || ""}
+                      onChange={(e) => setScreeningAnswers({ ...screeningAnswers, [question]: e.target.value })}
+                      rows={3}
+                      placeholder="Your answer..."
+                      className="textarea-field"
+                    />
+                  </div>
+                ))}
+              </div>
+              {!allScreeningQuestionsAnswered && (
+                <p className="mt-2 text-xs text-red-400">All screening questions must be answered</p>
+              )}
+            </div>
+          )}
+
           {error && (
             <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">{error}</div>
           )}
 
-          <button onClick={handleSubmit} disabled={!isValid || loading} className="btn-primary w-full flex items-center justify-center gap-2">
+          <button onClick={handleSubmit} disabled={!isFormValid || loading} className="btn-primary w-full flex items-center justify-center gap-2">
             {loading ? <><Spinner />Submitting...</> : "Submit Proposal"}
           </button>
         </div>
@@ -141,7 +245,10 @@ function ConfirmModal({ jobTitle, bidAmount, proposal, onConfirm, onClose }: Con
           <div>
             <span className="text-amber-800 text-xs uppercase tracking-wider font-semibold block mb-1">Proposal Preview</span>
             <p className="text-amber-100/70 text-sm line-clamp-3 italic">
-              "{proposal.slice(0, 100)}{proposal.length > 100 ? "..." : ""}"
+              {'\u201c'}
+              {proposal.slice(0, 100)}
+              {proposal.length > 100 ? "..." : ""}
+              {'\u201d'}
             </p>
           </div>
 
