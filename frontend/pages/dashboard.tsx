@@ -13,7 +13,7 @@ import {
   extendJobExpiry,
 } from "@/lib/api";
 import { getXLMBalance, getUSDCBalance, streamAccountTransactions } from "@/lib/stellar";
-import { formatXLM, shortenAddress, timeAgo, statusLabel, statusClass, copyToClipboard, exportJobsToCSV, exportApplicationsToCSV, CATEGORY_ICONS } from "@/utils/format";
+import { formatXLM, shortenAddress, timeAgo, statusLabel, statusClass, copyToClipboard, exportJobsToCSV, exportApplicationsToCSV, calculateJobProgress } from "@/utils/format";
 import type { Job, Application } from "@/utils/types";
 import EditProfileForm from "@/components/EditProfileForm";
 import SendPaymentForm from "@/components/SendPaymentForm";
@@ -23,6 +23,7 @@ import WithdrawToBankModal, {
   type WithdrawHistoryEntry,
 } from "@/components/WithdrawToBankModal";
 import PasskeyManager from "@/components/PasskeyManager";
+import { useBookmarks } from "@/hooks/useBookmarks";
 import { useToast } from "@/components/Toast";
 import { usePriceContext } from "@/contexts/PriceContext";
 import clsx from "clsx";
@@ -171,7 +172,7 @@ interface DashboardProps {
   onConnect: (pk: string) => void;
 }
 
-type Tab = "posted" | "applied" | "send" | "edit_profile" | "templates" | "price_alerts" | "withdrawals" | "earnings" | "security";
+type Tab = "posted" | "applied" | "send" | "transactions" | "edit_profile" | "templates" | "price_alerts" | "withdrawals" | "earnings" | "security";
 const REPOST_JOB_PREFILL_STORAGE_KEY = "marketpay_repost_job_prefill";
 
 export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
@@ -205,6 +206,8 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
   const [alertMatchesDismissed, setAlertMatchesDismissed] = useState(false);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [extendingJob, setExtendingJob] = useState<string | null>(null);
+  const [savedJobs, setSavedJobs] = useState<Job[]>([]);
+  const { savedCount, getSavedJobs } = useBookmarks();
   const { info, success } = useToast();
   const { xlmPriceUsd } = usePriceContext();
 
@@ -523,7 +526,7 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
       )}
 
       <div className="flex border-b border-market-500/10 mb-6 overflow-x-auto">
-        {(["posted", "applied", "earnings", "send", "edit_profile", "templates", "price_alerts", "withdrawals", "security"] as Tab[]).map((t) => (
+        {(["posted", "applied", "earnings", "send", "transactions", "edit_profile", "templates", "price_alerts", "withdrawals", "security"] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)}
             className={clsx(
               "px-6 py-3 text-sm font-medium transition-all border-b-2 -mb-px whitespace-nowrap relative",
@@ -540,13 +543,14 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
                  )}
                </>
              ) :
-             t === "earnings"     ? "Earnings" :
-             t === "send"         ? "Send Payment" :
-             t === "edit_profile" ? "Edit Profile" :
-             t === "templates"    ? "Templates" :
-             t === "price_alerts" ? "Price Alerts" :
-             t === "withdrawals"  ? "Withdrawals" :
-             t === "security"     ? "Security" :
+             t === "earnings"      ? "Earnings" :
+             t === "send"          ? "Send Payment" :
+             t === "transactions"  ? "Transactions" :
+             t === "edit_profile"  ? "Edit Profile" :
+             t === "templates"     ? "Templates" :
+             t === "price_alerts"  ? "Price Alerts" :
+             t === "withdrawals"   ? "Withdrawals" :
+             t === "security"      ? "Security" :
              t}
           </button>
         ))}
@@ -575,16 +579,36 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
             </div>
 
             {myJobs.map((job) => (
-              <div key={job.id} className="card-hover flex items-center justify-between gap-4">
-                  <Link href={`/jobs/${job.id}`} className="flex-1 min-w-0 block">
+              <Link key={job.id} href={`/jobs/${job.id}`}>
+                <div className="card-hover flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className={statusClass(job.status)}>{statusLabel(job.status)}</span>
                       <span className="text-xs text-amber-800">{job.category}</span>
                     </div>
                     <p className="font-display font-semibold text-amber-100 truncate">{job.title}</p>
                     <p className="text-xs text-amber-800 mt-1">{job.applicantCount} applicant{job.applicantCount !== 1 ? "s" : ""} · {timeAgo(job.createdAt)}</p>
-                  </Link>
-                  <div className="text-right flex-shrink-0 space-y-2">
+                    
+                    {/* Progress Indicator */}
+                    {(() => {
+                      const progress = calculateJobProgress(job);
+                      if (!progress) return null;
+                      return (
+                        <div className="mt-3 max-w-xs">
+                          <div className="w-full bg-ink-900 rounded-full h-1.5 mb-1.5 overflow-hidden border border-market-500/10">
+                            <div 
+                              className={clsx("h-full transition-all duration-500", progress.colorClass)} 
+                              style={{ width: `${progress.percentage}%` }} 
+                            />
+                          </div>
+                          <p className="text-[10px] uppercase tracking-wider font-semibold text-amber-800">
+                            {progress.daysRemaining} days remaining
+                          </p>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div className="text-right flex-shrink-0">
                     <p className="font-mono font-semibold text-market-400">{formatXLM(job.budget)}</p>
                     {isRepostable(job.status) && (
                       <button
@@ -847,6 +871,14 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
         />
       ) : tab === "security" ? (
         <PasskeyManager publicKey={publicKey} />
+      ) : tab === "transactions" ? (
+        <div className="card text-center py-16">
+          <p className="font-display text-xl text-amber-100 mb-2">Transaction History</p>
+          <p className="text-amber-800 text-sm mb-6">View your complete transaction history with deep links to Stellar explorer</p>
+          <Link href="/dashboard/transactions" className="btn-primary text-sm">
+            View Transactions
+          </Link>
+        </div>
       ) : tab === "edit_profile" ? (
         <EditProfileForm publicKey={publicKey} />
       ) : null}
