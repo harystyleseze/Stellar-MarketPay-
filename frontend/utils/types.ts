@@ -6,7 +6,6 @@
 export type JobStatus = "open" | "in_progress" | "completed" | "cancelled" | "expired";
 export type UserRole  = "client" | "freelancer" | "both";
 export type Currency  = "XLM" | "USDC";
-export type JobVisibility = "public" | "private" | "invite_only";
 export type FreelancerTier = "Newcomer" | "Rising Star" | "Expert" | "Top Talent";
 export type AvailabilityStatus = "available" | "busy" | "unavailable";
 export type PortfolioItemType = "github" | "live" | "stellar_tx";
@@ -63,6 +62,9 @@ export interface Job {
   deadline?: string;
   timezone?: string;     // IANA timezone string (e.g., "America/New_York")
   screeningQuestions?: string[];  // Up to 5 screening questions
+  expiresAt?: string;    // ISO date when job expires if not hired
+  extendedCount?: number; // Number of times expiry has been extended
+  extendedUntil?: string; // Final expiry after all extensions
 }
 
 export interface Application {
@@ -75,7 +77,18 @@ export interface Application {
   currency: Currency;    // XLM or USDC
   status: "pending" | "accepted" | "rejected";
   screeningAnswers?: Record<string, string>;  // Question -> Answer mapping
+  referredBy?: string;
   createdAt: string;
+}
+
+export interface ProfileStats {
+  totalApplications: number;
+  acceptedApplications: number;
+  successRate: number;
+}
+
+export interface ResponseTimeStats {
+  averageDays: number | null;
 }
 
 export interface UserProfile {
@@ -84,6 +97,7 @@ export interface UserProfile {
   bio?: string;
   skills?: string[];
   portfolioItems?: PortfolioItem[];
+  portfolioFiles?: PortfolioFile[];
   availability?: Availability | null;
   role: UserRole;
   completedJobs: number;
@@ -92,8 +106,8 @@ export interface UserProfile {
   tier?: FreelancerTier;
   /** Number of ratings received (when returned by profile API). */
   ratingCount?: number;
-  didHash?: string;
-  isKycVerified?: boolean;
+  reputationPoints?: number;
+  referralCount?: number;
   createdAt: string;
   updatedAt?: string;
 }
@@ -135,4 +149,14 @@ export interface EscrowState {
   amount: string;
   status: "locked" | "released" | "refunded" | "disputed";
   createdLedger: number;
+}
+
+export interface Message {
+  id: string;
+  jobId: string;
+  senderAddress: string;
+  receiverAddress: string;
+  content: string;
+  read: boolean;
+  createdAt: string;
 }

@@ -4,15 +4,17 @@
  * Issue #21: Integrates Soroban escrow contract into job creation flow.
  */
 import { useEffect, useState } from "react";
+import type { Transaction } from "@stellar/stellar-sdk";
 import { createJob, updateJobEscrowId, deleteJob, saveDraft, fetchDrafts } from "@/lib/api";
 import { buildCreateEscrowTransaction, submitSorobanTransaction } from "@/lib/stellar";
+import { fetchActualFee } from "@/lib/sorobanFees";
 import { signTransactionWithWallet } from "@/lib/wallet";
 import { JOB_CATEGORIES, SKILL_SUGGESTIONS, formatUSDEquivalent, getMonthlyEstimate } from "@/utils/format";
 import { useRouter } from "next/router";
 import clsx from "clsx";
 import { useToast } from "@/components/Toast";
 import { usePriceContext } from "@/contexts/PriceContext";
-import type { Currency, Job } from "@/utils/types";
+import type { Currency } from "@/utils/types";
 
 interface PostJobFormProps { publicKey: string; }
 
@@ -26,7 +28,6 @@ type FormState = {
   deadline: string;
   currency: Currency;
   timezone: string;
-  visibility: "public" | "private" | "invite_only";
 };
 
 type JobTemplate = {
@@ -49,18 +50,15 @@ const emptyForm: FormState = {
   category: "",
   skillInput: "",
   deadline: "",
-  currency: "XLM" as Currency,
+  currency: "XLM",
   timezone: "",
-  visibility: "public",
 };
 
 export default function PostJobForm({ publicKey }: PostJobFormProps) {
   const router = useRouter();
   const toast = useToast();
   const { xlmPriceUsd } = usePriceContext();
-  const [form, setForm] = useState<FormState>({
-    title: "", description: "", budget: "", category: "", skillInput: "", deadline: "", currency: "XLM" as Currency, timezone: "", visibility: "public",
-  });
+  const [form, setForm] = useState<FormState>(emptyForm);
   const [skills, setSkills] = useState<string[]>([]);
   const [screeningQuestions, setScreeningQuestions] = useState<string[]>([""]);
   const [loading, setLoading] = useState(false);
@@ -68,131 +66,12 @@ export default function PostJobForm({ publicKey }: PostJobFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
-  const [templates, setTemplates] = useState<JobTemplate[]>(() => readTemplates());
+  const [templates, setTemplates] = useState<JobTemplate[]>([]);
   const [selectedTemplateName, setSelectedTemplateName] = useState("");
   const [templateNameInput, setTemplateNameInput] = useState("");
   const [templateError, setTemplateError] = useState<string | null>(null);
-  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [pendingOverwriteTemplate, setPendingOverwriteTemplate] = useState<JobTemplate | null>(null);
-  const [draftId, setDraftId] = useState<string | null>(null);
-  const [showResumeDraft, setShowResumeDraft] = useState(false);
-  const [availableDrafts, setAvailableDrafts] = useState<any[]>([]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const rawPrefill = window.localStorage.getItem(SCOPE_PREFILL_STORAGE_KEY);
-    if (!rawPrefill) return;
-    try {
-      const prefill = JSON.parse(rawPrefill);
-      if (prefill && typeof prefill === "object") {
-        setForm((prev) => ({
-          ...prev,
-          title: typeof prefill.title === "string" ? prefill.title : prev.title,
-          description: typeof prefill.description === "string" ? prefill.description : prev.description,
-          category: typeof prefill.category === "string" ? prefill.category : prev.category,
-        }));
-      }
-    } catch (_) {
-      // Ignore malformed prefill payload
-    } finally {
-      window.localStorage.removeItem(SCOPE_PREFILL_STORAGE_KEY);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const rawRepostPrefill = window.localStorage.getItem(REPOST_JOB_PREFILL_STORAGE_KEY);
-    if (!rawRepostPrefill) return;
-
-    try {
-      const prefill = JSON.parse(rawRepostPrefill) as Partial<Job>;
-      setForm((prev) => ({
-        ...prev,
-        title: typeof prefill.title === "string" ? prefill.title : prev.title,
-        description: typeof prefill.description === "string" ? prefill.description : prev.description,
-        budget: typeof prefill.budget === "string" ? prefill.budget : prev.budget,
-        category: typeof prefill.category === "string" ? prefill.category : prev.category,
-        currency: prefill.currency === "USDC" || prefill.currency === "XLM" ? prefill.currency : prev.currency,
-        timezone: typeof prefill.timezone === "string" ? prefill.timezone : prev.timezone,
-        deadline: "",
-      }));
-
-      if (Array.isArray(prefill.skills)) {
-        setSkills(prefill.skills.filter((skill): skill is string => typeof skill === "string"));
-      }
-      if (Array.isArray(prefill.screeningQuestions)) {
-        const filteredQuestions = prefill.screeningQuestions.filter(
-          (question): question is string => typeof question === "string"
-        );
-        setScreeningQuestions(filteredQuestions.length > 0 ? filteredQuestions : [""]);
-      }
-    } catch (_) {
-      // Ignore malformed repost prefill payload
-    } finally {
-      window.localStorage.removeItem(REPOST_JOB_PREFILL_STORAGE_KEY);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const loadDrafts = async () => {
-      try {
-        const drafts = await fetchDrafts();
-        setAvailableDrafts(drafts);
-        if (drafts.length > 0 && !draftId) {
-          setShowResumeDraft(true);
-        }
-      } catch (_) {
-        // Silently ignore draft loading errors
-      }
-    };
-    loadDrafts();
-  }, [publicKey, draftId]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !publicKey) return;
-    const autoSaveInterval = setInterval(async () => {
-      if (form.title.trim().length > 0 || form.description.trim().length > 0) {
-        try {
-          const draft = await saveDraft({
-            id: draftId,
-            title: form.title,
-            description: form.description,
-            budget: form.budget,
-            category: form.category,
-            skills: skills,
-            currency: form.currency,
-            timezone: form.timezone,
-            visibility: form.visibility,
-            screeningQuestions: screeningQuestions.filter(q => q.trim()),
-            deadline: form.deadline || null,
-          });
-          if (!draftId) setDraftId(draft.id);
-        } catch (_) {
-          // Silently ignore auto-save errors
-        }
-      }
-    }, 10000); // Auto-save every 10 seconds
-    return () => clearInterval(autoSaveInterval);
-  }, [form, skills, screeningQuestions, draftId, publicKey]);
-
-  const resumeDraft = (draft: any) => {
-    setForm((prev) => ({
-      ...prev,
-      title: draft.title || "",
-      description: draft.description || "",
-      budget: draft.budget?.toString() || "",
-      category: draft.category || "",
-      currency: draft.currency || "XLM",
-      timezone: draft.timezone || "",
-      visibility: draft.visibility || "public",
-      deadline: draft.deadline || "",
-    }));
-    setSkills(draft.skills || []);
-    setScreeningQuestions(draft.screening_questions?.length > 0 ? draft.screening_questions : [""]);
-    setDraftId(draft.id);
-    setShowResumeDraft(false);
-  };
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
 
   // Template feature states
   const [templates, setTemplates] = useState<JobTemplate[]>([]);
@@ -284,7 +163,12 @@ export default function PostJobForm({ publicKey }: PostJobFormProps) {
   const usdPreview = formatUSDEquivalent(form.budget, xlmPriceUsd);
   const monthlyEst = getMonthlyEstimate(form.budget, xlmPriceUsd);
 
-  const set = (key: string, val: string) => setForm((f) => ({ ...f, [key]: val }));
+  const set = <K extends keyof FormState>(key: K, val: FormState[K]) =>
+    setForm((current) => ({ ...current, [key]: val }));
+
+  useEffect(() => {
+    setTemplates(readTemplates());
+  }, []);
 
   // Filter suggestions based on input
   const filteredSuggestions = form.skillInput.trim().length > 0
@@ -304,6 +188,110 @@ export default function PostJobForm({ publicKey }: PostJobFormProps) {
   };
 
   const removeSkill = (s: string) => setSkills(skills.filter((x) => x !== s));
+
+  const buildTemplateFromCurrentForm = (name: string): JobTemplate => ({
+    name: name.trim(),
+    title: form.title,
+    description: form.description,
+    budget: form.budget,
+    category: form.category,
+    skills,
+    deadline: form.deadline,
+  });
+
+  const applyTemplate = (template: JobTemplate) => {
+    setForm((current) => ({
+      ...current,
+      title: template.title,
+      description: template.description,
+      budget: template.budget,
+      category: template.category,
+      deadline: template.deadline,
+      skillInput: "",
+    }));
+    setSkills(template.skills);
+    setSelectedTemplateName(template.name);
+  };
+
+  const persistTemplates = (nextTemplates: JobTemplate[]) => {
+    setTemplates(nextTemplates);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(JOB_TEMPLATES_STORAGE_KEY, JSON.stringify(nextTemplates));
+    }
+  };
+
+  const handleLoadTemplate = (name: string) => {
+    setSelectedTemplateName(name);
+    if (!name) return;
+
+    const selectedTemplate = templates.find((template) => template.name === name);
+    if (selectedTemplate) {
+      applyTemplate(selectedTemplate);
+      setTemplateNameInput(selectedTemplate.name);
+      setTemplateError(null);
+      setPendingOverwriteTemplate(null);
+    }
+  };
+
+  const handleSaveTemplate = () => {
+    const normalizedName = templateNameInput.trim();
+    if (!normalizedName) {
+      setTemplateError("Template name is required.");
+      return;
+    }
+
+    const template = buildTemplateFromCurrentForm(normalizedName);
+    const existingTemplate = templates.find((item) => item.name === normalizedName);
+
+    if (existingTemplate) {
+      setPendingOverwriteTemplate(template);
+      setTemplateError(null);
+      return;
+    }
+
+    persistTemplates([...templates, template]);
+    setSelectedTemplateName(template.name);
+    setPendingOverwriteTemplate(null);
+    setTemplateError(null);
+    toast.success(`Saved template: ${template.name}`);
+  };
+
+  const handleConfirmOverwrite = () => {
+    if (!pendingOverwriteTemplate) return;
+
+    const nextTemplates = templates.map((template) =>
+      template.name === pendingOverwriteTemplate.name ? pendingOverwriteTemplate : template
+    );
+    persistTemplates(nextTemplates);
+    setSelectedTemplateName(pendingOverwriteTemplate.name);
+    setPendingOverwriteTemplate(null);
+    setTemplateError(null);
+    toast.success(`Updated template: ${templateNameInput.trim()}`);
+  };
+
+  const handleCancelOverwrite = () => {
+    setPendingOverwriteTemplate(null);
+  };
+
+  const handleDeleteTemplate = () => {
+    if (!selectedTemplateName) return;
+    setShowDeleteConfirmation(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!selectedTemplateName) return;
+
+    const nextTemplates = templates.filter((template) => template.name !== selectedTemplateName);
+    persistTemplates(nextTemplates);
+    setSelectedTemplateName("");
+    setTemplateNameInput("");
+    setShowDeleteConfirmation(false);
+    toast.success("Template deleted.");
+  };
+
+  const handleCancelDelete = () => {
+    setShowDeleteConfirmation(false);
+  };
 
   const addScreeningQuestion = () => {
     if (screeningQuestions.length < 5) {
@@ -349,11 +337,8 @@ export default function PostJobForm({ publicKey }: PostJobFormProps) {
     setError(null);
     setStep("posting");
 
-    let job: Awaited<ReturnType<typeof createJob>> | null = null;
-
     try {
-      // Step 1 — Post job to backend
-      job = await createJob({
+      const job = await createJob({
         title: form.title.trim(),
         description: form.description.trim(),
         budget: parseFloat(form.budget).toFixed(7),
@@ -367,38 +352,19 @@ export default function PostJobForm({ publicKey }: PostJobFormProps) {
         screeningQuestions: screeningQuestions.filter(q => q.trim().length > 0),
       });
 
-      // Step 2 — Build & sign Soroban create_escrow() transaction
       setStep("locking");
 
       const unsignedTx = await buildCreateEscrowTransaction({
         clientPublicKey: publicKey,
         jobId: job.id,
-        // Use client as placeholder freelancer until one is hired
         freelancerAddress: publicKey,
         budget: parseFloat(form.budget).toFixed(7),
         currency: form.currency,
       });
 
-      const { signedXDR, error: signError } = await signTransactionWithWallet(unsignedTx.toXDR());
-      if (signError || !signedXDR) {
-        // Roll back: remove the orphaned job from the backend
-        await deleteJob(job.id).catch(() => {}); // best-effort
-        throw new Error(signError || "Freighter signing was cancelled");
-      }
-
-      // Step 3 — Submit to Soroban RPC and wait for confirmation
-      const txHash = await submitSorobanTransaction(signedXDR).catch(async (e) => {
-        // Roll back: remove the orphaned job from the backend
-        await deleteJob(job!.id).catch(() => {});
-        throw e;
-      });
-
-      // Step 4 — Persist escrow contract ID in the job record
-      await updateJobEscrowId(job.id, txHash);
-
-      setStep("done");
-      toast.success("Job posted and budget locked in escrow.");
-      router.push(`/jobs/${job.id}`);
+      // Pause here so the user can review the on-chain fee (Issue #222)
+      // before Freighter prompts them to sign.
+      setPendingEscrow({ transaction: unsignedTx, jobId: job.id });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setError(msg);
@@ -406,6 +372,55 @@ export default function PostJobForm({ publicKey }: PostJobFormProps) {
       toast.error(`Failed: ${msg}`);
       setLoading(false);
     }
+  };
+
+  const handleConfirmEscrowFee = async () => {
+    if (!pendingEscrow) return;
+    const { transaction, jobId } = pendingEscrow;
+    setPendingEscrow(null);
+
+    try {
+      const { signedXDR, error: signError } = await signTransactionWithWallet(transaction.toXDR());
+      if (signError || !signedXDR) {
+        await deleteJob(jobId).catch(() => {});
+        throw new Error(signError || "Freighter signing was cancelled");
+      }
+
+      const txHash = await submitSorobanTransaction(signedXDR).catch(async (e) => {
+        await deleteJob(jobId).catch(() => {});
+        throw e;
+      });
+
+      // Log the actual fee charged for the AC.
+      fetchActualFee(txHash).then((actual) => {
+        if (actual) {
+          // eslint-disable-next-line no-console
+          console.info(`[escrow] create_escrow ${jobId} actual fee ${actual.feeChargedXlm} XLM`);
+        }
+      }).catch(() => {});
+
+      await updateJobEscrowId(jobId, txHash);
+
+      setStep("done");
+      toast.success("Job posted and budget locked in escrow.");
+      router.push(`/jobs/${jobId}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setError(msg);
+      setStep("error");
+      toast.error(`Failed: ${msg}`);
+      setLoading(false);
+    }
+  };
+
+  const handleCancelEscrowFee = async () => {
+    if (!pendingEscrow) return;
+    const { jobId } = pendingEscrow;
+    setPendingEscrow(null);
+    await deleteJob(jobId).catch(() => {});
+    setStep("idle");
+    setLoading(false);
+    setError("Cancelled before signing — the orphaned job was removed.");
   };
 
   const handleLoadTemplate = (name: string) => {
@@ -901,6 +916,16 @@ export default function PostJobForm({ publicKey }: PostJobFormProps) {
           By posting, budget ({form.budget ? `${form.budget} ${form.currency}` : "—"}) will be held in a Soroban escrow contract and released when you approve of completed work.
         </p>
       </div>
+
+      {pendingEscrow && (
+        <FeeEstimationModal
+          transaction={pendingEscrow.transaction}
+          functionName="create_escrow"
+          payerPublicKey={publicKey}
+          onConfirm={handleConfirmEscrowFee}
+          onCancel={handleCancelEscrowFee}
+        />
+      )}
     </div>
   );
 }

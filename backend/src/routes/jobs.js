@@ -10,7 +10,7 @@ const { createRateLimiter } = require("../middleware/rateLimiter");
 const { verifyJWT } = require("../middleware/auth");
 
 const jobService = require("../services/jobService");
-const { createJob, getJob, listJobs, listJobsByClient, updateJobEscrowId, deleteJob, boostJob, incrementShareCount } = jobService.default || jobService;
+const { createJob, getJob, listJobs, listJobsByClient, updateJobEscrowId, deleteJob, boostJob, incrementShareCount, trackReferral } = jobService.default || jobService;
 const { verifyJWT } = require("../middleware/auth");
 const { inviteFreelancerToJob } = require("../services/jobInvitationService");
 const { logContractInteraction } = require("../services/contractAuditService");
@@ -68,25 +68,13 @@ router.get("/client/:publicKey", generalJobRateLimiter, async (req, res, next) =
 });
 
 // GET /api/jobs/:id — get single job
-router.get("/:id", generalJobRateLimiter, async (req, res, next) => {
-  try {
-    const job = await getJob(req.params.id);
-    const viewerAddress = req.query.viewerAddress;
-    const canView =
-      job.visibility === "public" ||
-      (typeof viewerAddress === "string" &&
-        (viewerAddress === job.clientAddress || viewerAddress === job.freelancerAddress));
-
-    if (job.visibility === "private" && !canView) {
-      return res.status(403).json({ success: false, error: "Job is private" });
-    }
-    res.json({ success: true, data: job });
-  }
+router.get("/:id", generalJobRateLimiter , async (req, res, next) => {
+  try { res.json({ success: true, data: await getJob(req.params.id) }); }
   catch (e) { next(e); }
 });
 
 // POST /api/jobs — create a new job
-router.post("/", jobCreationRateLimiter, async (req, res, next) => {
+router.post("/", jobCreationRateLimiter , async (req, res, next) => {
   try {
     const job = await createJob(req.body);
     res.status(201).json({ success: true, data: job });
@@ -166,6 +154,53 @@ router.get("/client/:publicKey", generalJobRateLimiter, (req, res, next) => {
   } catch (e) {
     next(e);
   }
+});
+
+// GET /api/jobs/:id/analytics — job performance analytics
+router.get("/:id/analytics", generalJobRateLimiter, async (req, res, next) => {
+  try {
+    const { getJobAnalytics } = require("../services/jobService");
+    const analytics = await getJobAnalytics(req.params.id);
+    res.json({ success: true, data: analytics });
+  } catch (e) { next(e); }
+});
+
+// PATCH /api/jobs/:id/extend — extend job expiry by 30 days
+router.patch("/:id/extend", verifyJWT, generalJobRateLimiter, async (req, res, next) => {
+  try {
+    const { extendJobExpiry } = require("../services/jobService");
+    const job = await extendJobExpiry(req.params.id, 30, 3);
+    res.json({ success: true, data: job });
+  } catch (e) { next(e); }
+});
+
+// POST /api/jobs/:id/referral — track a referral click
+router.post("/:id/referral", generalJobRateLimiter, async (req, res, next) => {
+  try {
+    const { referrer } = req.body;
+    if (!referrer) return res.status(400).json({ success: false, error: "Referrer address is required" });
+    const ip = req.ip;
+    await trackReferral(req.params.id, referrer, ip);
+    res.json({ success: true });
+  } catch (e) { next(e); }
+});
+
+// DELETE /api/jobs/:id — roll back an orphaned job (escrow failed after creation)
+router.delete("/:id", verifyJWT, generalJobRateLimiter, async (req, res, next) => {
+  try {
+    const { getExpiringJobs } = require("../services/jobService");
+    const jobs = await getExpiringJobs(3);
+    res.json({ success: true, data: jobs });
+  } catch (e) { next(e); }
+});
+
+// POST /api/jobs/expire-old — manually trigger expiry check (also runs as background job)
+router.post("/expire-old", verifyJWT, generalJobRateLimiter, async (req, res, next) => {
+  try {
+    const { expireOldJobs } = require("../services/jobService");
+    const count = await expireOldJobs();
+    res.json({ success: true, data: { expiredCount: count } });
+  } catch (e) { next(e); }
 });
 
 // POST /api/jobs/:id/score-proposals — score all applications using AI

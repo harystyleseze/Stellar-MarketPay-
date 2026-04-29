@@ -6,23 +6,22 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import WalletConnect from "@/components/WalletConnect";
-import {
-  fetchMyJobs,
-  fetchMyApplications,
-  fetchProposalTemplates,
-  createProposalTemplate,
-  updateProposalTemplate,
-  deleteProposalTemplate,
-  fetchPriceAlertPreference,
-  upsertPriceAlertPreference,
-} from "@/lib/api";
+import { fetchMyJobs, fetchMyApplications, fetchUnreadCount } from "@/lib/api";
 import { getXLMBalance, getUSDCBalance, streamAccountTransactions } from "@/lib/stellar";
 import { formatXLM, shortenAddress, timeAgo, statusLabel, statusClass, copyToClipboard, exportJobsToCSV, exportApplicationsToCSV, CATEGORY_ICONS } from "@/utils/format";
 import type { Job, Application } from "@/utils/types";
 import EditProfileForm from "@/components/EditProfileForm";
 import SendPaymentForm from "@/components/SendPaymentForm";
+import BuyXLMModal from "@/components/BuyXLMModal";
+import WithdrawToBankModal, {
+  loadWithdrawHistory,
+  type WithdrawHistoryEntry,
+} from "@/components/WithdrawToBankModal";
 import { useToast } from "@/components/Toast";
 import clsx from "clsx";
+import JobAnalytics from "@/components/JobAnalytics";
+
+const LOW_BALANCE_THRESHOLD_XLM = 5;
 
 // ── Job Alert localStorage helpers (mirrors jobs/index.tsx) ─────────────────
 const ALERT_KEY = "marketpay_job_alerts";
@@ -45,7 +44,7 @@ interface DashboardProps {
   onConnect: (pk: string) => void;
 }
 
-type Tab = "posted" | "applied" | "send" | "edit_profile" | "templates" | "price_alerts";
+type Tab = "posted" | "applied" | "send" | "edit_profile" | "templates" | "price_alerts" | "withdrawals";
 const REPOST_JOB_PREFILL_STORAGE_KEY = "marketpay_repost_job_prefill";
 
 export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
@@ -53,19 +52,33 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
   const [tab, setTab] = useState<Tab>("posted");
   const [myJobs, setMyJobs] = useState<Job[]>([]);
   const [myApplications, setMyApplications] = useState<Application[]>([]);
-  const [balance, setBalance] = useState<string | null>(null);
-  const [usdcBalance, setUsdcBalance] = useState<string | null>(null);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [balance, setBalance]           = useState<string | null>(null);
+  const [usdcBalance, setUsdcBalance]   = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
 
   const [processedTxs, setProcessedTxs] = useState<Set<string>>(new Set());
+  const [templates, setTemplates] = useState<{ id: string; name: string; content: string }[]>([]);
+  const [templateName, setTemplateName] = useState("");
+  const [templateContent, setTemplateContent] = useState("");
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [emailEnabled, setEmailEnabled] = useState(false);
+  const [alertEmail, setAlertEmail] = useState("");
+  const [showBuyXLM, setShowBuyXLM] = useState(false);
+  const [showWithdraw, setShowWithdraw] = useState(false);
+  const [withdrawHistory, setWithdrawHistory] = useState<WithdrawHistoryEntry[]>([]);
   const { info, success } = useToast();
+
+  const isRepostable = (status: Job["status"]) => status === "expired" || status === "cancelled";
 
   const handleCopy = async () => {
     if (!publicKey) return;
-    const success = await copyToClipboard(publicKey);
-    if (success) {
+    const ok = await copyToClipboard(publicKey);
+    if (ok) {
       setCopied(true);
       setCopyError(false);
       setTimeout(() => setCopied(false), 2000);
@@ -79,17 +92,11 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
     router.push({
       pathname: "/post-job",
       query: {
-  const [processedTxs, setProcessedTxs] = useState<Set<string>>(new Set());
-  const [templates, setTemplates] = useState<{ id: string; name: string; content: string }[]>([]);
-  const [templateName, setTemplateName] = useState("");
-  const [templateContent, setTemplateContent] = useState("");
-  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
-  const [minPrice, setMinPrice] = useState("");
-  const [maxPrice, setMaxPrice] = useState("");
-  const [emailEnabled, setEmailEnabled] = useState(false);
-  const [alertEmail, setAlertEmail] = useState("");
-  const { info, success } = useToast();
-  const isRepostable = (status: Job["status"]) => status === "expired" || status === "cancelled";
+        category: job.category,
+        freelancer: job.freelancerAddress || "",
+      },
+    });
+  };
 
   const handleRepost = (job: Job) => {
     if (typeof window === "undefined") return;
@@ -101,8 +108,33 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
         budget: job.budget,
         category: job.category,
         freelancer: job.freelancerAddress || "",
-      },
-    });
+      })
+    );
+    router.push("/post-job");
+  };
+
+  const refreshBalances = () => {
+    if (!publicKey) return;
+    Promise.all([getXLMBalance(publicKey), getUSDCBalance(publicKey)])
+      .then(([bal, usdc]) => {
+        setBalance(bal);
+        setUsdcBalance(usdc);
+      })
+      .catch(() => {});
+  };
+
+  const handleExtendJob = async (jobId: string) => {
+    setExtendingJob(jobId);
+    try {
+      await extendJobExpiry(jobId);
+      // Refresh jobs to update expiry info
+      const jobs = await fetchMyJobs(publicKey!);
+      setMyJobs(jobs);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setExtendingJob(null);
+    }
   };
 
   // Sync alert subscriptions from localStorage
@@ -151,12 +183,14 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
       fetchMyApplications(publicKey),
       getXLMBalance(publicKey),
       getUSDCBalance(publicKey),
+      fetchUnreadCount(),
     ])
-      .then(([jobs, apps, bal, usdc]) => {
+      .then(([jobs, apps, bal, usdc, unread]) => {
         setMyJobs(jobs);
         setMyApplications(apps);
         setBalance(bal);
         setUsdcBalance(usdc);
+        setUnreadCount(unread);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -210,6 +244,10 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
 
     return () => ws.close();
   }, [publicKey, info, success]);
+
+  useEffect(() => {
+    setWithdrawHistory(loadWithdrawHistory());
+  }, [showWithdraw]);
 
   useEffect(() => {
     if (!publicKey) return;
@@ -284,6 +322,33 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
             ) : (
               <div className="h-10 w-48 bg-market-500/8 rounded-xl animate-pulse" />
             )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {balance !== null && parseFloat(balance) < LOW_BALANCE_THRESHOLD_XLM && (
+                <button
+                  onClick={() => setShowBuyXLM(true)}
+                  className="btn-primary text-xs py-1.5 px-3"
+                  data-testid="buy-xlm-button"
+                >
+                  Buy XLM
+                </button>
+              )}
+              {balance !== null && parseFloat(balance) >= LOW_BALANCE_THRESHOLD_XLM && (
+                <button
+                  onClick={() => setShowBuyXLM(true)}
+                  className="btn-secondary text-xs py-1.5 px-3"
+                  data-testid="buy-xlm-button"
+                >
+                  Buy XLM
+                </button>
+              )}
+              <button
+                onClick={() => setShowWithdraw(true)}
+                className="btn-secondary text-xs py-1.5 px-3"
+                data-testid="withdraw-to-bank-button"
+              >
+                Withdraw to Bank
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 text-center">
             {[
@@ -314,20 +379,24 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
       )}
 
       <div className="flex border-b border-market-500/10 mb-6 overflow-x-auto">
-        {(["posted", "applied", "send", "edit_profile", "templates", "price_alerts"] as Tab[]).map((t) => (
+        {(["posted", "applied", "send", "edit_profile", "templates", "price_alerts", "withdrawals"] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)}
             className={clsx(
               "px-6 py-3 text-sm font-medium transition-all border-b-2 -mb-px whitespace-nowrap relative",
               tab === t ? "border-market-400 text-market-300" : "border-transparent text-amber-700 hover:text-amber-400"
             )}>
-            {t === "posted" ? `Jobs Posted (${myJobs.length})` :
-             t === "applied" ? `Applications (${myApplications.length})` :
-             t === "send" ? "Send Payment" :
-            {t === "posted"      ? `Jobs Posted (${myJobs.length})` :
-             t === "applied"     ? `Applications (${myApplications.length})` :
-             t === "send"        ? "Send Payment" :
-             t === "templates"   ? "Proposal Templates" :
-             t === "price_alerts"? "Price Alerts" :
+            {t === "posted"    ? `Jobs Posted (${myJobs.length})` :
+             t === "applied"   ? (
+               <>
+                 <span>Applications</span>
+                 {unreadCount > 0 && (
+                   <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-red-500 text-white">
+                     {unreadCount > 99 ? "99+" : unreadCount}
+                   </span>
+                 )}
+               </>
+             ) :
+             t === "send"      ? "Send Payment" :
              "Edit Profile"}
             {t === "job_alerts" && alertSubscriptions.length > 0 && (
               <span className="absolute top-2 right-1 w-2 h-2 bg-market-400 rounded-full" />
@@ -421,14 +490,46 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
                   </div>
                 </div>
               </Link>
-            ))}
+             ))}
           </div>
         )
-      ) : tab === "send" ? (
-        <div className="max-w-lg">
-          <SendPaymentForm fromPublicKey={publicKey} />
+      ) : tab === "analytics" ? (
+        <div className="space-y-4">
+          {myJobs.length === 0 ? (
+            <div className="card text-center py-16">
+              <p className="font-display text-xl text-amber-100 mb-2">No jobs posted yet</p>
+              <p className="text-amber-800 text-sm mb-6">Post a job to see analytics</p>
+              <Link href="/post-job" className="btn-primary text-sm">Post a Job →</Link>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div className="flex gap-4 overflow-x-auto pb-2">
+                {myJobs.map((job) => (
+                  <button
+                    key={job.id}
+                    onClick={() => setSelectedJob(selectedJob?.id === job.id ? null : job)}
+                    className={clsx(
+                      "btn-secondary px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all",
+                      selectedJob?.id === job.id
+                        ? "bg-market-500/20 text-market-300 border-market-400"
+                        : "bg-ink-900/50 text-amber-700 hover:text-amber-300 border-transparent"
+                    )}
+                  >
+                    {job.title}
+                  </button>
+                ))}
+              </div>
+              {selectedJob ? (
+                <JobAnalytics job={selectedJob} onExtend={() => handleExtendJob(selectedJob.id)} />
+              ) : (
+                <div className="card text-center py-12">
+                  <p className="text-amber-800">Select a job to view its analytics</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-      ) : tab === "templates" ? (
+      ) : tab === "send" ? (
         <div className="space-y-4">
           <div className="card space-y-3">
             <p className="text-sm text-amber-100 font-medium">
@@ -552,9 +653,65 @@ export default function Dashboard({ publicKey, onConnect }: DashboardProps) {
             Save Alerts
           </button>
         </div>
+      ) : tab === "withdrawals" ? (
+        withdrawHistory.length === 0 ? (
+          <div className="card text-center py-16">
+            <p className="font-display text-xl text-amber-100 mb-2">No withdrawals yet</p>
+            <p className="text-amber-800 text-sm mb-6">
+              Convert your XLM or USDC to USD, EUR, or NGN — paid directly to your bank account.
+            </p>
+            <button
+              onClick={() => setShowWithdraw(true)}
+              className="btn-primary text-sm"
+              data-testid="empty-state-withdraw-button"
+            >
+              Withdraw to Bank →
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {withdrawHistory.map((entry) => (
+              <div key={entry.id} className="card flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs px-2.5 py-0.5 rounded-full border bg-market-500/10 text-market-400 border-market-500/20">
+                      {entry.flow}
+                    </span>
+                    <span className="text-xs text-amber-700">{entry.status}</span>
+                  </div>
+                  <p className="font-display font-semibold text-amber-100 truncate">
+                    {entry.amount} {entry.asset} → {entry.fiatCurrency}
+                  </p>
+                  <p className="text-xs text-amber-800 mt-1">
+                    {new Date(entry.startedAt).toLocaleString()}
+                    {entry.externalTxId && ` · Bank ref ${entry.externalTxId.slice(0, 12)}…`}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
       ) : tab === "edit_profile" ? (
         <EditProfileForm publicKey={publicKey} />
       ) : null}
+
+      {showBuyXLM && (
+        <BuyXLMModal
+          publicKey={publicKey}
+          onClose={() => setShowBuyXLM(false)}
+          onComplete={refreshBalances}
+        />
+      )}
+      {showWithdraw && (
+        <WithdrawToBankModal
+          publicKey={publicKey}
+          onClose={() => {
+            setShowWithdraw(false);
+            setWithdrawHistory(loadWithdrawHistory());
+            refreshBalances();
+          }}
+        />
+      )}
     </div>
   );
 }
